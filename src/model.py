@@ -73,7 +73,7 @@ class CFTModel:
 
 			hidden_layer = tf.layers.dense(
 				hidden_layer, layer_size,
-				activation=tf.nn.elu)
+				activation=tf.nn.relu)
 
 		self.c_logits = tf.layers.dense(
 			hidden_layer, self.n_outputs,
@@ -93,7 +93,7 @@ class CFTModel:
 
 			hidden_layer = tf.layers.dense(
 				hidden_layer, layer_size,
-				activation=tf.nn.elu)
+				activation=tf.nn.relu)
 
 		self.t_mu = tf.layers.dense(
 			hidden_layer, self.n_outputs,
@@ -114,14 +114,26 @@ class CFTModel:
 
 		# NOTE: n_outputs > 1 not yet implemented
 
-		self.log_p_ts_given_c_is_1 = self.s * lognormal_logpdf(
+		log_p_t1_given_c_is_1 = lognormal_logpdf(
 			self.t, self.t_mu, self.t_sig)
-
-		self.log_p_ts_given_c_is_1 += self.s * log_uniform_survival(
+		log_p_t1_given_c_is_1 += log_uniform_survival(
 			self.t, self.max_t * 1.1)
-
-		self.log_p_ts_given_c_is_1 += (1 - self.s) * lognormal_logsurvival(
+		log_p_t0_given_c_is_1 = lognormal_logsurvival(
 			self.t, self.t_mu, self.t_sig)
+
+		self.log_p_ts_given_c_is_1 = tf.where(
+			self.s == 1,
+			x=log_p_t1_given_c_is_1,
+			y=log_p_t0_given_c_is_1)
+
+		#self.log_p_ts_given_c_is_1 = self.s * lognormal_logpdf(
+		#	self.t, self.t_mu, self.t_sig)
+
+		#self.log_p_ts_given_c_is_1 += self.s * log_uniform_survival(
+		#	self.t, self.max_t * 1.1)
+
+		#self.log_p_ts_given_c_is_1 += (1 - self.s) * lognormal_logsurvival(
+		#	self.t, self.t_mu, self.t_sig)
 
 		self.log_p_ts_given_c_is_0 = self.s * -1 * PENALTY
 
@@ -185,7 +197,7 @@ def nlog_sigmoid(logits):
 
 
 def log_uniform_survival(t, max_t):
-	return 1 - t / max_t
+	return tf.log(1 - t / max_t)
 
 
 def get_batch(batch_size, *arrs):
