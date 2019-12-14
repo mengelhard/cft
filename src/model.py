@@ -1,16 +1,19 @@
 import numpy as np
 import tensorflow as tf
 
-LOG_SQRT_2PI = np.log(np.sqrt(2 * np.pi))
-PENALTY = 1e10
+EPS = 1e-8
 
 
 class CFTModel:
 
-	def __init__(self, c_layer_sizes=(), f_layer_sizes=()):
+	def __init__(self, c_layer_sizes=(), t_layer_sizes=(), dropout_pct=0.,
+		activation_fn=tf.nn.relu, false_positive_prob=1e-1):
 
 		self.c_layer_sizes = c_layer_sizes
-		self.f_layer_sizes = f_layer_sizes
+		self.t_layer_sizes = t_layer_sizes
+		self.dropout_pct = dropout_pct
+		self.activation_fn = activation_fn
+		self.fp_nlogprob = -1 * np.log(false_positive_prob)
 
 
 	def train(self, sess, x_train, t_train, s_train,
@@ -20,6 +23,8 @@ class CFTModel:
 
 		self.n_features = np.shape(x_train)[1]
 		self.n_outputs = np.shape(t_train)[1]
+
+		# check if this is the problem -- might be taking log 0 later
 
 		self.max_t = np.amax(t_train)
 
@@ -67,13 +72,10 @@ class CFTModel:
 
 	def _build_c_model(self):
 
-		hidden_layer = self.x
-
-		for layer_size in self.c_layer_sizes:
-
-			hidden_layer = tf.layers.dense(
-				hidden_layer, layer_size,
-				activation=tf.nn.relu)
+		hidden_layer = mlp(
+			self.x, self.c_layer_sizes,
+			dropout_pct=self.dropout_pct,
+			activation_fn=self.activation_fn)
 
 		self.c_logits = tf.layers.dense(
 			hidden_layer, self.n_outputs,
@@ -87,76 +89,58 @@ class CFTModel:
 
 	def _build_t_model(self):
 
-		hidden_layer = self.x
-
-		for layer_size in self.f_layer_sizes:
-
-			hidden_layer = tf.layers.dense(
-				hidden_layer, layer_size,
-				activation=tf.nn.relu)
+		hidden_layer = mlp(
+			self.x, self.t_layer_sizes,
+			dropout_pct=self.dropout_pct,
+			activation_fn=self.activation_fn)
 
 		self.t_mu = tf.layers.dense(
 			hidden_layer, self.n_outputs,
 			activation=None)
 
-		#self.t_sig = tf.exp(tf.layers.dense(
-		#	hidden_layer, self.n_outputs,
-		#	activation=None))
+		self.t_logvar = tf.layers.dense(
+			hidden_layer, self.n_outputs,
+			activation=None)
 
-		self.t_sig = tf.constant(0.5, dtype=tf.float64)
+		#self.t_logvar = tf.constant(np.log(.25), dtype=tf.float64)
 
 		self.t_pred = tf.exp(self.t_mu + tf.random_normal(
-			shape=tf.shape(self.t_sig),
-			dtype=tf.float64) * self.t_sig)
+			shape=tf.shape(self.t_logvar),
+			dtype=tf.float64) * tf.exp(.05 * self.t_logvar))
 
 
 	def _build_nloglik(self):
 
 		# NOTE: n_outputs > 1 not yet implemented
 
-		log_p_t1_given_c_is_1 = lognormal_logpdf(
-			self.t, self.t_mu, self.t_sig)
-		log_p_t1_given_c_is_1 += log_uniform_survival(
-			self.t, self.max_t * 1.1)
-		log_p_t0_given_c_is_1 = lognormal_logsurvival(
-			self.t, self.t_mu, self.t_sig)
+		fp_nlogprob = self.fp_nlogprob
 
-		self.log_p_ts_given_c_is_1 = tf.where(
-			self.s == 1,
-			x=log_p_t1_given_c_is_1,
-			y=log_p_t0_given_c_is_1)
+		# is this what we want to do??
+		fp_nlogprob += nlog_sigmoid(self.c_logits)
 
-		#self.log_p_ts_given_c_is_1 = self.s * lognormal_logpdf(
-		#	self.t, self.t_mu, self.t_sig)
+		c_prob = tf.sigmoid(self.c_logits)
 
-		#self.log_p_ts_given_c_is_1 += self.s * log_uniform_survival(
-		#	self.t, self.max_t * 1.1)
+		nloglik = self.s * lognormal_nlogpdf(
+			self.t, self.t_mu, self.t_logvar)
 
-		#self.log_p_ts_given_c_is_1 += (1 - self.s) * lognormal_logsurvival(
-		#	self.t, self.t_mu, self.t_sig)
+		nloglik += (1 - self.s) * lognormal_nlogsurvival(
+			self.t, self.t_mu, self.t_logvar) * c_prob
 
-		self.log_p_ts_given_c_is_0 = self.s * -1 * PENALTY
-
-		nloglik = nlog_sigmoid(self.c_logits) * self.log_p_ts_given_c_is_1
-		nloglik += nlog_sigmoid(-1 * self.c_logits) * self.log_p_ts_given_c_is_0
+		nloglik += self.s * fp_nlogprob * (1 - c_prob)
 
 		self.nloglik = tf.reduce_mean(nloglik)
 
 
 	def _summarize(self, sess, xs, ts, ss):
 
-		nloglik, c1, c0, logsig, logmean = sess.run(
+		nloglik, logvar, mean = sess.run(
 			[self.nloglik,
-			 self.log_p_ts_given_c_is_1,
-			 self.log_p_ts_given_c_is_0,
-			 self.t_sig,
+			 self.t_logvar,
 			 self.t_mu],
 			feed_dict={self.x: xs, self.t: ts, self.s:ss})
 
 		print('nloglik = %.2e' % nloglik)
-		print('log_p(t, s | x, c = 1): %.2e' % np.mean(c1))
-		print('log_p(t, s | x, c = 0): %.2e' % np.mean(c0))
-		print('t_mu: %.2e' % np.mean(logmean), 't_sig: %.2e\n' % np.mean(logsig))
+		print('t_mu: %.2e' % np.mean(mean), 't_logvar: %.2e\n' % np.mean(logvar))
 
 
 	def predict_c(self, sess, x_test):
@@ -174,30 +158,52 @@ class CFTModel:
 		return sess.run(self.c_logit_weights)
 
 
-def lognormal_logpdf(t, mu, sig):
+def mlp(x, hidden_layer_sizes,
+		dropout_pct = 0., activation_fn=tf.nn.relu):
 
-	logt = tf.log(t)
+	hidden_layer = x
+
+	for layer_size in hidden_layer_sizes:
+
+		hidden_layer = tf.layers.dense(
+			hidden_layer, layer_size,
+			activation=activation_fn)
+
+		if dropout_pct > 0:
+			hidden_layer = tf.layers.dropout(
+				hidden_layer, rate=dropout_pct)
+
+	return hidden_layer
+
+
+def lognormal_nlogpdf(t, mu, logvar):
+
+	logt = tf.log(t + EPS)
+	scale = tf.exp(0.5 * logvar)
 
 	normal_dist = tf.distributions.Normal(
-		loc=mu, scale=sig)
+		loc=mu, scale=scale)
 	
-	return normal_dist.log_prob(logt) - logt
+	return logt - normal_dist.log_prob(logt)
 
 
-def lognormal_logsurvival(t, mu, sig):
+def lognormal_nlogsurvival(t, mu, logvar):
+
+	logt = tf.log(t + EPS)
+	scale = tf.exp(0.5 * logvar)
 
 	normal_dist = tf.distributions.Normal(
-		loc=mu, scale=sig)
+		loc=mu, scale=scale)
 	
-	return normal_dist.log_survival_function(tf.log(t))
+	return -1 * normal_dist.log_survival_function(logt)
+
+
+def uniform_nlogsurvival(t, max_t):
+	return -1 * tf.log(1 + EPS - t / max_t)
 
 
 def nlog_sigmoid(logits):
 	return tf.log(tf.exp(-1 * logits) + 1)
-
-
-def log_uniform_survival(t, max_t):
-	return tf.log(1 - t / max_t)
 
 
 def get_batch(batch_size, *arrs):
@@ -205,3 +211,4 @@ def get_batch(batch_size, *arrs):
     l = len(combined)
     for ndx in range(0, l, batch_size):
         yield zip(*combined[ndx:min(ndx + batch_size, l)])
+
