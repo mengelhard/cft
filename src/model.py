@@ -6,23 +6,31 @@ EPS = 1e-8
 
 class CFTModel:
 
-	def __init__(self, c_layer_sizes=(), t_layer_sizes=(), dropout_pct=0.,
-		activation_fn=tf.nn.relu, false_positive_prob=1e-1):
+	def __init__(self, c_layer_sizes=(), t_layer_sizes=(),
+		dropout_pct=0., arm_estimator=True,
+		activation_fn=tf.nn.relu):
 
 		self.c_layer_sizes = c_layer_sizes
 		self.t_layer_sizes = t_layer_sizes
 		self.dropout_pct = dropout_pct
+		self.arm_estimator = arm_estimator
 		self.activation_fn = activation_fn
-		self.fp_nlogprob = -1 * np.log(false_positive_prob)
 
 
-	def train(self, sess, x_train, t_train, s_train,
-			  n_epochs, learning_rate=1e-3, batch_size=300):
-
-		assert np.shape(t_train)[1] == np.shape(s_train)[1]
+	def train(self, sess,
+			  x_train, t_train, s_train,
+			  x_val, t_val, s_val,
+			  max_epochs, max_epochs_no_improve=0,
+			  arm_estimator=True, learning_rate=1e-3,
+			  batch_size=300, batch_eval_freq=10):
 
 		self.n_features = np.shape(x_train)[1]
 		self.n_outputs = np.shape(t_train)[1]
+
+		assert np.shape(x_train)[1] == self.n_features
+		assert np.shape(s_train)[1] == self.n_outputs
+		assert np.shape(t_val)[1] == self.n_outputs
+		assert np.shape(s_val)[1] == self.n_outputs
 
 		# check if this is the problem -- might be taking log 0 later
 
@@ -38,21 +46,53 @@ class CFTModel:
 
 		sess.run(tf.global_variables_initializer())
 
-		print('Initial Values:')
-		self._summarize(sess, x_train, t_train, s_train)
+		train_stats = []
+		val_stats = []
+		best_val_nloglik = np.inf
+		n_epochs_no_improve = 0
 
-		for epoch in range(n_epochs):
+		batches_per_epoch = int(np.ceil(
+			np.shape(x_train)[0] / batch_size))
 
-			for x_batch, t_batch, s_batch in get_batch(
-				batch_size, x_train, t_train, s_train):
+		for epoch_idx in range(max_epochs):
 
-				sess.run(train_step,
-					feed_dict={self.x: x_batch, self.t: t_batch, self.s:s_batch})
+			for batch_idx, (xb, tb, sb) in enumerate(get_batch(
+				batch_size, x_train, t_train, s_train)):
 
-			if epoch % 10 == 0:
+				sess.run(train_step, feed_dict={
+					self.x: xb,
+					self.t: tb,
+					self.s: sb})
 
-				print('Completed Epoch %i' % epoch)
-				self._summarize(sess, x_train, t_train, s_train)
+				if batch_idx % batch_eval_freq == 0:
+					idx = epoch_idx * batches_per_epoch + batch_idx
+					train_stats.append(
+						(idx, ) + self._get_train_stats(
+							sess, xb, tb, sb))
+
+			idx = (epoch_idx + 1) * batches_per_epoch
+			val_stats.append(
+				(idx, ) + self._get_train_stats(
+				sess, x_val, t_val, s_val))
+
+			if epoch_idx % 10 == 0:
+
+				print('Completed Epoch %i' % epoch_idx)
+				self._summarize(
+					np.mean(train_stats[-batches_per_epoch:], axis=0),
+					val_stats[-1],
+					batches_per_epoch)
+
+			if val_stats[-1][1] < best_val_nloglik:
+				best_val_nloglik = val_stats[-1][1]
+				n_epochs_no_improve = 0
+			else:
+				n_epochs_no_improve += 1
+
+			if n_epochs_no_improve > max_epochs_no_improve:
+				break
+
+		return train_stats, val_stats
 
 
 	def _build_placeholders(self):
@@ -113,7 +153,7 @@ class CFTModel:
 
 		# NOTE: n_outputs > 1 not yet implemented
 
-		fp_nlogprob = self.fp_nlogprob
+		fp_nlogprob = .1
 
 		# is this what we want to do??
 		fp_nlogprob += nlog_sigmoid(self.c_logits)
@@ -131,16 +171,26 @@ class CFTModel:
 		self.nloglik = tf.reduce_mean(nloglik)
 
 
-	def _summarize(self, sess, xs, ts, ss):
+	def _get_train_stats(self, sess, xs, ts, ss):
 
 		nloglik, logvar, mean = sess.run(
 			[self.nloglik,
-			 self.t_logvar,
-			 self.t_mu],
+			 self.t_mu,
+			 self.t_logvar],
 			feed_dict={self.x: xs, self.t: ts, self.s:ss})
 
-		print('nloglik = %.2e' % nloglik)
-		print('t_mu: %.2e' % np.mean(mean), 't_logvar: %.2e\n' % np.mean(logvar))
+		avg_mean = np.mean(mean)
+		avg_logvar = np.mean(logvar)
+
+		return nloglik, avg_mean, avg_logvar
+
+
+	def _summarize(self, train_stats, val_stats, batches_per_epoch):
+
+		print('nloglik (train) = %.2e' % train_stats[1])
+		print('t_mu: %.2e' % train_stats[2], 't_logvar: %.2e\n' % train_stats[3])
+		print('nloglik (val) = %.2e' % val_stats[1])
+		print('t_mu: %.2e' % val_stats[2], 't_logvar: %.2e\n' % val_stats[3])
 
 
 	def predict_c(self, sess, x_test):
