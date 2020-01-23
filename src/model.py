@@ -1,19 +1,27 @@
 import numpy as np
 import tensorflow as tf
+from tensorflow.python.ops.parallel_for.gradients import jacobian
 
-EPS = 1e-8
+EPS = 1e-4
+PENALTY = 4
 
 
 class CFTModel:
 
-	def __init__(self, c_layer_sizes=(), t_layer_sizes=(),
-		dropout_pct=0., arm_estimator=True,
+	def __init__(self, encoder_layer_sizes=(),
+		decoder_layer_sizes=(),
+		dropout_pct=0., estimator='none',
+		n_samples=30,# gs_temperature=1e-1,
+		fpr_likelihood=False,
 		activation_fn=tf.nn.relu):
 
-		self.c_layer_sizes = c_layer_sizes
-		self.t_layer_sizes = t_layer_sizes
+		self.encoder_layer_sizes = encoder_layer_sizes
+		self.decoder_layer_sizes = decoder_layer_sizes
 		self.dropout_pct = dropout_pct
-		self.arm_estimator = arm_estimator
+		self.estimator = estimator
+		self.n_samples = n_samples
+		#self.gs_temperature = gs_temperature
+		self.fpr_likelihood = fpr_likelihood
 		self.activation_fn = activation_fn
 
 
@@ -21,8 +29,9 @@ class CFTModel:
 			  x_train, t_train, s_train,
 			  x_val, t_val, s_val,
 			  max_epochs, max_epochs_no_improve=0,
-			  arm_estimator=True, learning_rate=1e-3,
-			  batch_size=300, batch_eval_freq=10):
+			  learning_rate=1e-3,
+			  batch_size=300, batch_eval_freq=10,
+			  verbose=False):
 
 		self.n_features = np.shape(x_train)[1]
 		self.n_outputs = np.shape(t_train)[1]
@@ -35,14 +44,17 @@ class CFTModel:
 		# check if this is the problem -- might be taking log 0 later
 
 		self.max_t = np.amax(t_train)
+		### NOTE ON MAX T: may want to make this dimension-specific ###
 
+		self.opt = tf.train.AdamOptimizer(learning_rate)
 		self._build_placeholders()
-		self._build_c_model()
-		self._build_t_model()
-		self._build_nloglik()
 
-		train_step = tf.train.AdamOptimizer(
-			learning_rate).minimize(self.nloglik)
+		if self.estimator == 'arm':
+			self._build_model_arm_estimator(self.n_samples)
+		elif self.estimator == 'gs':
+			self._build_model_gs_estimator(self.n_samples)
+		else:
+			self._build_model_no_estimator()
 
 		sess.run(tf.global_variables_initializer())
 
@@ -59,10 +71,16 @@ class CFTModel:
 			for batch_idx, (xb, tb, sb) in enumerate(get_batch(
 				batch_size, x_train, t_train, s_train)):
 
-				sess.run(train_step, feed_dict={
-					self.x: xb,
-					self.t: tb,
-					self.s: sb})
+				lgnrm_nlogp_, lgnrm_nlogs_, unif_nlogs_, _ = sess.run(
+					[self.lgnrm_nlogp, self.lgnrm_nlogs, self.unif_nlogs, self.train_op],
+					feed_dict={self.x: xb, self.t: tb, self.s: sb})
+
+				if np.isnan(np.mean(lgnrm_nlogp_)):
+					print('Warning: lgnrm_nlogp is NaN')
+				if np.isnan(np.mean(lgnrm_nlogs_)):
+					print('Warning: lgnrm_nlogs is NaN')
+				if np.isnan(np.mean(unif_nlogs_)):
+					print('Warning: unif_nlogs is NaN')
 
 				if batch_idx % batch_eval_freq == 0:
 					idx = epoch_idx * batches_per_epoch + batch_idx
@@ -78,10 +96,12 @@ class CFTModel:
 			if epoch_idx % 10 == 0:
 
 				print('Completed Epoch %i' % epoch_idx)
-				self._summarize(
-					np.mean(train_stats[-batches_per_epoch:], axis=0),
-					val_stats[-1],
-					batches_per_epoch)
+
+				if verbose:
+					self._summarize(
+						np.mean(train_stats[-batches_per_epoch:], axis=0),
+						val_stats[-1],
+						batches_per_epoch)
 
 			if val_stats[-1][1] < best_val_nloglik:
 				best_val_nloglik = val_stats[-1][1]
@@ -95,100 +115,206 @@ class CFTModel:
 		return train_stats, val_stats
 
 
+	def _build_model_no_estimator(self):
+
+		self.c_logits, self.c_probs = self._encoder(self.x)
+		self.t_mu, self.t_logvar = self._decoder(self.x)
+
+		nll = self._nloglik(self.c_probs, self.t_mu, self.t_logvar)
+		self.nll = tf.reduce_mean(nll)
+
+		self.train_op = self.opt.minimize(self.nll)
+
+
+	def _build_model_gs_estimator(self):
+
+		self._build_p_given_c()
+
+		c = sample_gumbel_softmax(
+			self.c_logits,
+			self.gs_temperature,
+			self.n_gs_samples)
+
+		self.nloglik = tf.reduce_mean(self._nloglik(c))
+
+
+	def _build_model_arm_estimator(self, n_samples):
+
+		self.c_logits, self.c_probs = self._encoder(self.x)
+
+		unif_samples = tf.random_uniform(
+			shape=(1, n_samples, 1),
+			dtype=tf.float32)
+
+		# normal c samples
+
+		c = unif_samples < self.c_probs[:, tf.newaxis, :]
+		c = tf.cast(c, dtype=tf.float32)
+
+		x = tf.tile(self.x[:, tf.newaxis, :], (1, n_samples, 1))
+		xc = tf.concat([x, c], axis=2)
+
+		self.t_mu, self.t_logvar = self._decoder(xc)
+
+		nll = self._nloglik(c, self.t_mu, self.t_logvar)
+		self.nll = tf.reduce_mean(nll)
+
+		# calculate gradient wrt decoder
+
+		decoder_grads = self.opt.compute_gradients(
+			self.nll, var_list=self.decoder_vars)
+
+		self.decoder_op = self.opt.apply_gradients(decoder_grads)
+
+		# ARM-specific samples
+
+		c_neg = unif_samples > (1 - self.c_probs[:, tf.newaxis, :])
+		c_neg = tf.cast(c_neg, dtype=tf.float32)
+
+		xc_neg = tf.concat([x, c_neg], axis=2)
+
+		t_mu_neg, t_logvar_neg = self._decoder(xc_neg, reuse=True)
+
+		nll_neg = self._nloglik(c_neg, t_mu_neg, t_logvar_neg)
+
+		# calculate gradient wrt encoder using ARM
+
+		logit_grads = (nll_neg - nll) * (unif_samples - .5)
+		logit_grads = tf.reduce_mean(logit_grads, axis=1)
+
+		encoder_grads = tf.gradients(
+			self.c_logits,
+			self.encoder_vars,
+			grad_ys=logit_grads)
+
+		self.encoder_op = self.opt.apply_gradients(
+			zip(encoder_grads, self.encoder_vars))
+
+		with tf.control_dependencies([self.decoder_op, self.encoder_op]):
+			self.train_op = tf.no_op()
+
+
+	def _nloglik(self, c, t_mu, t_logvar):
+
+		if self.estimator == 'none':
+			t = self.t
+			s = self.s
+		else:
+			t = self.t[:, tf.newaxis, :]
+			s = self.s[:, tf.newaxis, :]
+
+		self.lgnrm_nlogp = lognormal_nlogpdf(t, self.t_mu, self.t_logvar)
+		self.lgnrm_nlogs = lognormal_nlogsurvival(t, self.t_mu, self.t_logvar)
+		self.unif_nlogs = uniform_nlogsurvival(t, self.max_t)
+
+		if self.fpr_likelihood:
+
+			#fp_nlogprob = -1 * np.log(1e-1)
+			fp_nlogp = nlog_sigmoid(self.c_logits)
+
+			if not self.estimator == 'none':
+				fp_nlogp = fp_nlogp[:, tf.newaxis, :]
+
+			nll = s * self.lgnrm_nlogp
+			nll += (1 - s) * c * self.lgnrm_nlogs
+			nll += s * (1 - c) * fp_nlogp
+
+		else:
+
+			p_c1 = s * (self.lgnrm_nlogp + self.unif_nlogs)
+			p_c1 += (1 - s) * self.lgnrm_nlogs
+			p_c0 = s * PENALTY
+
+			nll = p_c1 * c + p_c0 * (1 - c)
+
+		return nll
+
+
 	def _build_placeholders(self):
 		
 		self.x = tf.placeholder(
 			shape=(None, self.n_features),
-			dtype=tf.float64)
+			dtype=tf.float32)
 
 		self.t = tf.placeholder(
 			shape=(None, self.n_outputs),
-			dtype=tf.float64)
+			dtype=tf.float32)
 
 		self.s = tf.placeholder(
 			shape=(None, self.n_outputs),
-			dtype=tf.float64)
+			dtype=tf.float32)
 
 
-	def _build_c_model(self):
+	def _encoder(self, h):
 
-		hidden_layer = mlp(
-			self.x, self.c_layer_sizes,
-			dropout_pct=self.dropout_pct,
-			activation_fn=self.activation_fn)
+		with tf.variable_scope('encoder'):
 
-		self.c_logits = tf.layers.dense(
-			hidden_layer, self.n_outputs,
-			activation=None, name='c_logit_weights')
+			hidden_layer = mlp(
+				h, self.encoder_layer_sizes,
+				dropout_pct=self.dropout_pct,
+				activation_fn=self.activation_fn)
 
-		self.c_logit_weights = tf.get_default_graph().get_tensor_by_name(
-			'c_logit_weights/kernel:0')
+			logits = tf.layers.dense(
+				hidden_layer, self.n_outputs,
+				activation=None, name='logit_weights')
 
-		self.c_probs = tf.nn.sigmoid(self.c_logits)
+			probs = tf.nn.sigmoid(logits)
 
+		self.encoder_vars = tf.get_collection(
+			tf.GraphKeys.GLOBAL_VARIABLES,
+			scope='encoder')
 
-	def _build_t_model(self):
-
-		hidden_layer = mlp(
-			self.x, self.t_layer_sizes,
-			dropout_pct=self.dropout_pct,
-			activation_fn=self.activation_fn)
-
-		self.t_mu = tf.layers.dense(
-			hidden_layer, self.n_outputs,
-			activation=None)
-
-		self.t_logvar = tf.layers.dense(
-			hidden_layer, self.n_outputs,
-			activation=None)
-
-		#self.t_logvar = tf.constant(np.log(.25), dtype=tf.float64)
-
-		self.t_pred = tf.exp(self.t_mu + tf.random_normal(
-			shape=tf.shape(self.t_logvar),
-			dtype=tf.float64) * tf.exp(.05 * self.t_logvar))
+		return logits, probs
 
 
-	def _build_nloglik(self):
+	def _decoder(self, h, reuse=False):
 
-		# NOTE: n_outputs > 1 not yet implemented
+		with tf.variable_scope('decoder', reuse=reuse):
 
-		fp_nlogprob = .1
+			hidden_layer = mlp(
+				h, self.decoder_layer_sizes,
+				dropout_pct=self.dropout_pct,
+				activation_fn=self.activation_fn,
+				reuse=reuse)
 
-		# is this what we want to do??
-		fp_nlogprob += nlog_sigmoid(self.c_logits)
+			mu = tf.layers.dense(
+				hidden_layer, self.n_outputs,
+				activation=None,
+				name='mu',
+				reuse=reuse)
 
-		c_prob = tf.sigmoid(self.c_logits)
+			logvar = tf.layers.dense(
+				hidden_layer, self.n_outputs,
+				activation=None,
+				name='logvar',
+				reuse=reuse)
 
-		nloglik = self.s * lognormal_nlogpdf(
-			self.t, self.t_mu, self.t_logvar)
+		self.t_pred = tf.exp(mu + tf.random_normal(
+			shape=tf.shape(logvar),
+			dtype=tf.float32) * tf.exp(.05 * logvar))
 
-		nloglik += (1 - self.s) * lognormal_nlogsurvival(
-			self.t, self.t_mu, self.t_logvar) * c_prob
+		self.decoder_vars = tf.get_collection(
+			tf.GraphKeys.GLOBAL_VARIABLES,
+			scope='decoder')
 
-		nloglik += self.s * fp_nlogprob * (1 - c_prob)
-
-		self.nloglik = tf.reduce_mean(nloglik)
+		return mu, logvar
 
 
 	def _get_train_stats(self, sess, xs, ts, ss):
 
-		nloglik, logvar, mean = sess.run(
-			[self.nloglik,
+		nloglik, mean, logvar = sess.run(
+			[self.nll,
 			 self.t_mu,
 			 self.t_logvar],
 			feed_dict={self.x: xs, self.t: ts, self.s:ss})
 
-		avg_mean = np.mean(mean)
-		avg_logvar = np.mean(logvar)
-
-		return nloglik, avg_mean, avg_logvar
+		return nloglik, np.mean(mean), np.mean(logvar)
 
 
 	def _summarize(self, train_stats, val_stats, batches_per_epoch):
 
 		print('nloglik (train) = %.2e' % train_stats[1])
-		print('t_mu: %.2e' % train_stats[2], 't_logvar: %.2e\n' % train_stats[3])
+		print('t_mu: %.2e' % train_stats[2], 't_logvar: %.2e' % train_stats[3])
 		print('nloglik (val) = %.2e' % val_stats[1])
 		print('t_mu: %.2e' % val_stats[2], 't_logvar: %.2e\n' % val_stats[3])
 
@@ -209,19 +335,26 @@ class CFTModel:
 
 
 def mlp(x, hidden_layer_sizes,
-		dropout_pct = 0., activation_fn=tf.nn.relu):
+		dropout_pct = 0.,
+		activation_fn=tf.nn.relu,
+		reuse=False):
 
 	hidden_layer = x
 
-	for layer_size in hidden_layer_sizes:
+	with tf.variable_scope('mlp', reuse=reuse):
 
-		hidden_layer = tf.layers.dense(
-			hidden_layer, layer_size,
-			activation=activation_fn)
+		for i, layer_size in enumerate(hidden_layer_sizes):
 
-		if dropout_pct > 0:
-			hidden_layer = tf.layers.dropout(
-				hidden_layer, rate=dropout_pct)
+			hidden_layer = tf.layers.dense(
+				hidden_layer, layer_size,
+				activation=activation_fn,
+				name='fc_%i' % i,
+				reuse=reuse)
+
+			if dropout_pct > 0:
+				hidden_layer = tf.layers.dropout(
+					hidden_layer, rate=dropout_pct,
+					name='dropout_%i' % i)
 
 	return hidden_layer
 
@@ -257,8 +390,35 @@ def nlog_sigmoid(logits):
 
 
 def get_batch(batch_size, *arrs):
-    combined = list(zip(*arrs))
-    l = len(combined)
-    for ndx in range(0, l, batch_size):
-        yield zip(*combined[ndx:min(ndx + batch_size, l)])
+	combined = list(zip(*arrs))
+	l = len(combined)
+	for ndx in range(0, l, batch_size):
+		yield zip(*combined[ndx:min(ndx + batch_size, l)])
+
+
+def sample_gumbel(shape, eps=1e-10):
+	"""Sample from Gumbel(0, 1)"""
+	U = tf.random_uniform(shape, minval=0, maxval=1)
+	return -tf.log(-tf.log(U + eps) + eps)
+
+
+def sample_gumbel_softmax(logits, temperature, n_samples=1):
+	""" Draw samples from the Gumbel-Softmax distribution"""
+	samples = sample_gumbel((n_samples, ))
+	y = logits[:, :, tf.newaxis] + samples[tf.newaxis, tf.newaxis, :]
+	return tf.nn.sigmoid(y / temperature)  # check dimension
+
+
+def tile_and_flatten(x, n_samples, n_features):
+	xt = tf.tile(x[:, tf.newaxis, :], (1, n_samples, 1))
+	return flatten_samples(xt, n_features)
+
+
+def flatten_samples(x, n_features):
+	return tf.reshape(x, (-1, n_features))
+
+
+def unflatten_samples(x, n_samples, n_features):
+	return tf.reshape(x, (-1, n_samples, n_features))
+
 
