@@ -1,6 +1,5 @@
 import numpy as np
 import tensorflow as tf
-from tensorflow.python.ops.parallel_for.gradients import jacobian
 
 EPS = 1e-4
 PENALTY = 4
