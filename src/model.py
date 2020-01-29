@@ -2,7 +2,7 @@ import numpy as np
 import tensorflow as tf
 
 EPS = 1e-4
-PENALTY = 4
+PENALTY = 3
 
 
 class CFTModel:
@@ -10,7 +10,7 @@ class CFTModel:
 	def __init__(self, encoder_layer_sizes=(),
 		decoder_layer_sizes=(),
 		dropout_pct=0., estimator='none',
-		n_samples=30,# gs_temperature=1e-1,
+		n_samples=30, gs_temperature=1.,
 		fpr_likelihood=False,
 		activation_fn=tf.nn.relu):
 
@@ -19,7 +19,7 @@ class CFTModel:
 		self.dropout_pct = dropout_pct
 		self.estimator = estimator
 		self.n_samples = n_samples
-		#self.gs_temperature = gs_temperature
+		self.gs_temperature = gs_temperature
 		self.fpr_likelihood = fpr_likelihood
 		self.activation_fn = activation_fn
 
@@ -125,16 +125,24 @@ class CFTModel:
 		self.train_op = self.opt.minimize(self.nll)
 
 
-	def _build_model_gs_estimator(self):
+	def _build_model_gs_estimator(self, n_samples):
 
-		self._build_p_given_c()
+		self.c_logits, self.c_probs = self._encoder(self.x)
 
-		c = sample_gumbel_softmax(
+		c = sample_gumbel_bernoulli(
 			self.c_logits,
 			self.gs_temperature,
-			self.n_gs_samples)
+			n_samples)
 
-		self.nloglik = tf.reduce_mean(self._nloglik(c))
+		x = tf.tile(self.x[:, tf.newaxis, :], (1, n_samples, 1))
+		xc = tf.concat([x, c], axis=2)
+
+		self.t_mu, self.t_logvar = self._decoder(xc)
+
+		nll = self._nloglik(c, self.t_mu, self.t_logvar)
+		self.nll = tf.reduce_mean(nll)
+
+		self.train_op = self.opt.minimize(self.nll)
 
 
 	def _build_model_arm_estimator(self, n_samples):
@@ -401,11 +409,11 @@ def sample_gumbel(shape, eps=1e-10):
 	return -tf.log(-tf.log(U + eps) + eps)
 
 
-def sample_gumbel_softmax(logits, temperature, n_samples=1):
-	""" Draw samples from the Gumbel-Softmax distribution"""
-	samples = sample_gumbel((n_samples, ))
-	y = logits[:, :, tf.newaxis] + samples[tf.newaxis, tf.newaxis, :]
-	return tf.nn.sigmoid(y / temperature)  # check dimension
+def sample_gumbel_bernoulli(logits, temperature=1., n_samples=1):
+	""" Draw samples from the Gumbel-Bernoulli distribution"""
+	samples_centered = sample_gumbel((n_samples, )) - sample_gumbel((n_samples, ))
+	y = logits[:, tf.newaxis, :] + samples_centered[tf.newaxis, :, tf.newaxis]
+	return tf.nn.sigmoid(y / temperature)
 
 
 def tile_and_flatten(x, n_samples, n_features):
