@@ -11,7 +11,9 @@ class CFTModel:
 		decoder_layer_sizes=(),
 		dropout_pct=0., estimator='none',
 		n_samples=30, gs_temperature=1.,
+		fpr=5e-2,
 		fpr_likelihood=False,
+		prop_fpr=True,
 		activation_fn=tf.nn.relu):
 
 		self.encoder_layer_sizes = encoder_layer_sizes
@@ -20,7 +22,9 @@ class CFTModel:
 		self.estimator = estimator
 		self.n_samples = n_samples
 		self.gs_temperature = gs_temperature
+		self.nlog_fpr = -1 * np.log(fpr)
 		self.fpr_likelihood = fpr_likelihood
+		self.prop_fpr = prop_fpr
 		self.activation_fn = activation_fn
 
 
@@ -216,21 +220,23 @@ class CFTModel:
 
 		if self.fpr_likelihood:
 
-			#fp_nlogprob = -1 * np.log(1e-1)
-			fp_nlogp = nlog_sigmoid(self.c_logits)
+			nlog_fpr = self.nlog_fpr
+
+			if self.prop_fpr:
+				nlog_fpr += nlog_sigmoid(self.c_logits)
 
 			if not self.estimator == 'none':
-				fp_nlogp = fp_nlogp[:, tf.newaxis, :]
+				nlog_fpr = nlog_fpr[:, tf.newaxis, :]
 
 			nll = s * self.lgnrm_nlogp
 			nll += (1 - s) * c * self.lgnrm_nlogs
-			nll += s * (1 - c) * fp_nlogp
+			nll += s * (1 - c) * nlog_fpr
 
 		else:
 
 			p_c1 = s * (self.lgnrm_nlogp + self.unif_nlogs)
 			p_c1 += (1 - s) * self.lgnrm_nlogs
-			p_c0 = s * PENALTY
+			p_c0 = s * self.nlog_fpr
 
 			nll = p_c1 * c + p_c0 * (1 - c)
 
