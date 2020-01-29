@@ -223,10 +223,11 @@ class CFTModel:
 			nlog_fpr = self.nlog_fpr
 
 			if self.prop_fpr:
-				nlog_fpr += nlog_sigmoid(self.c_logits)
 
-			if not self.estimator == 'none':
-				nlog_fpr = nlog_fpr[:, tf.newaxis, :]
+				nlog_fpr += nlog_sigmoid(self.c_logits)
+				
+				if not self.estimator == 'none':
+					nlog_fpr = nlog_fpr[:, tf.newaxis, :]
 
 			nll = s * self.lgnrm_nlogp
 			nll += (1 - s) * c * self.lgnrm_nlogs
