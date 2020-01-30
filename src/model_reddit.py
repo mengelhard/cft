@@ -1,10 +1,13 @@
 import numpy as np
 import tensorflow as tf
+import pickle
 
 
-class CFTModel:
+class CFTModelReddit:
 
-	def __init__(self, encoder_layer_sizes=(),
+	def __init__(self,
+		embedding_layer_sizes=(),
+		encoder_layer_sizes=(),
 		decoder_layer_sizes=(),
 		dropout_pct=0., estimator='none',
 		n_samples=30, gs_temperature=1.,
@@ -13,6 +16,7 @@ class CFTModel:
 		prop_fpr=True,
 		activation_fn=tf.nn.relu):
 
+		self.embedding_layer_sizes = embedding_layer_sizes
 		self.encoder_layer_sizes = encoder_layer_sizes
 		self.decoder_layer_sizes = decoder_layer_sizes
 		self.dropout_pct = dropout_pct
@@ -26,28 +30,17 @@ class CFTModel:
 
 
 	def train(self, sess,
-			  x_train, t_train, s_train,
-			  x_val, t_val, s_val,
+			  train_files,
+			  val_files,
 			  max_epochs, max_epochs_no_improve=0,
 			  learning_rate=1e-3,
 			  batch_size=300, batch_eval_freq=10,
 			  verbose=False):
 
-		self.n_features = np.shape(x_train)[1]
-		self.n_outputs = np.shape(t_train)[1]
-
-		assert np.shape(x_train)[1] == self.n_features
-		assert np.shape(s_train)[1] == self.n_outputs
-		assert np.shape(t_val)[1] == self.n_outputs
-		assert np.shape(s_val)[1] == self.n_outputs
-
-		# check if this is the problem -- might be taking log 0 later
-
-		self.max_t = np.amax(t_train)
-		### NOTE ON MAX T: may want to make this dimension-specific ###
-
+		self.n_outputs = 9
 		self.opt = tf.train.AdamOptimizer(learning_rate)
 		self._build_placeholders()
+		self._build_x()
 
 		if self.estimator == 'arm':
 			self._build_model_arm_estimator(self.n_samples)
@@ -63,17 +56,17 @@ class CFTModel:
 		best_val_nloglik = np.inf
 		n_epochs_no_improve = 0
 
-		batches_per_epoch = int(np.ceil(
-			np.shape(x_train)[0] / batch_size))
+		batches_per_epoch = len(train_files)
 
 		for epoch_idx in range(max_epochs):
 
-			for batch_idx, (xb, tb, sb) in enumerate(get_batch(
-				batch_size, x_train, t_train, s_train)):
+			for batch_idx, batch_file in enumerate(train_files):
+
+				xvb, xfb, tb, sb = load_batch(batch_file)
 
 				lgnrm_nlogp_, lgnrm_nlogs_, unif_nlogs_, _ = sess.run(
 					[self.lgnrm_nlogp, self.lgnrm_nlogs, self.unif_nlogs, self.train_op],
-					feed_dict={self.x: xb, self.t: tb, self.s: sb})
+					feed_dict={self.xv: xvb, self.xf: xfb, self.t: tb, self.s: sb})
 
 				if np.isnan(np.mean(lgnrm_nlogp_)):
 					print('Warning: lgnrm_nlogp is NaN')
@@ -86,12 +79,21 @@ class CFTModel:
 					idx = epoch_idx * batches_per_epoch + batch_idx
 					train_stats.append(
 						(idx, ) + self._get_train_stats(
-							sess, xb, tb, sb))
+							sess, xvb, xfb, tb, sb))
 
 			idx = (epoch_idx + 1) * batches_per_epoch
-			val_stats.append(
-				(idx, ) + self._get_train_stats(
-				sess, x_val, t_val, s_val))
+
+			current_val_stats = []
+
+			for val_batch_idx, batch_file in enumerate(val_files):
+
+				xvb, xfb, tb, sb = load_batch(batch_file)
+
+				current_val_stats.append(
+					self._get_train_stats(
+						sess, xvb, xfb, tb, sb))
+
+			val_stats.append((idx, ) + tuple(np.mean(current_val_stats, axis=0)))
 
 			if epoch_idx % 10 == 0:
 
@@ -243,17 +245,38 @@ class CFTModel:
 
 	def _build_placeholders(self):
 		
-		self.x = tf.placeholder(
-			shape=(None, self.n_features),
+		self.xv = tf.placeholder(
+			shape=(None, 20, 512),
+			dtype=tf.float32)
+
+		self.xf = tf.placeholder(
+			shape=(None, 2),
 			dtype=tf.float32)
 
 		self.t = tf.placeholder(
 			shape=(None, self.n_outputs),
 			dtype=tf.float32)
 
+		self.max_t = tf.reduce_max(self.t)
+
 		self.s = tf.placeholder(
 			shape=(None, self.n_outputs),
 			dtype=tf.float32)
+
+
+	def _build_x(self):
+
+		with tf.variable_scope('embeddings'):
+
+			x_refined = mlp(
+				self.xv, self.embedding_layer_sizes,
+				dropout_pct=0.,
+				activation_fn=tf.nn.tanh)
+
+			x_max = tf.reduce_max(x_refined, axis=1)
+			x_mean = tf.reduce_mean(x_refined, axis=1)
+
+			self.x = tf.concat([x_max, x_mean, self.xf], axis=1)
 
 
 	def _encoder(self, h):
@@ -311,13 +334,13 @@ class CFTModel:
 		return mu, logvar
 
 
-	def _get_train_stats(self, sess, xs, ts, ss):
+	def _get_train_stats(self, sess, xvs, xfs, ts, ss):
 
 		nloglik, mean, logvar = sess.run(
 			[self.nll,
 			 self.t_mu,
 			 self.t_logvar],
-			feed_dict={self.x: xs, self.t: ts, self.s:ss})
+			feed_dict={self.xv: xvs, self.xf: xfs, self.t: ts, self.s:ss})
 
 		return nloglik, np.mean(mean), np.mean(logvar)
 
@@ -330,14 +353,18 @@ class CFTModel:
 		print('t_mu: %.2e' % val_stats[2], 't_logvar: %.2e\n' % val_stats[3])
 
 
-	def predict_c(self, sess, x_test):
+	def predict_c(self, sess, xv_test, xf_test):
 
-		return sess.run(self.c_probs, feed_dict={self.x: x_test})
+		return sess.run(
+			self.c_probs,
+			feed_dict={self.xv: xv_test, self.xf: xf_test})
 
 
-	def predict_t(self, sess, x_test):
+	def predict_t(self, sess, xv_test, xf_test):
 
-		return sess.run(self.t_pred, feed_dict={self.x: x_test})
+		return sess.run(
+			self.t_pred,
+			feed_dict={self.xv: xv_test, self.xf: xf_test})
 
 
 	def get_c_weights(self, sess):
@@ -381,9 +408,9 @@ def lognormal_nlogpdf(t, mu, logvar, epsilon=1e-4):
 	return logt - normal_dist.log_prob(logt)
 
 
-def lognormal_nlogsurvival(t, mu, logvar):
+def lognormal_nlogsurvival(t, mu, logvar, epsilon=1e-4):
 
-	logt = tf.log(t + EPS)
+	logt = tf.log(t + epsilon)
 	scale = tf.exp(0.5 * logvar)
 
 	normal_dist = tf.distributions.Normal(
@@ -400,11 +427,61 @@ def nlog_sigmoid(logits):
 	return tf.log(tf.exp(-1 * logits) + 1)
 
 
-def get_batch(batch_size, *arrs):
-	combined = list(zip(*arrs))
-	l = len(combined)
-	for ndx in range(0, l, batch_size):
-		yield zip(*combined[ndx:min(ndx + batch_size, l)])
+def load_pickle(fn):
+	with open(fn, 'rb') as file:
+		p = pickle.load(file)
+	return p
+
+
+def get_avg_comment_length(user):
+	return np.mean([len(x) for x in user['comments']['raw_texts']])
+
+
+def get_events(user):
+
+	subreddits = ['ADHD', 'Anxiety', 'books', 'depression', 'Fitness',
+				  'LifeProTips', 'mentalhealth', 'SuicideWatch', 'worldnews']
+
+	return [user['events'][subreddit] for subreddit in subreddits]
+
+
+def normalize(arr, epsilon=1e-4):
+	a = np.array(arr)
+	return (a - a.mean()) / np.sqrt(a.var() + epsilon)
+
+
+def load_batch(fn):
+	
+	batch = load_pickle(fn)
+	usernames = list(batch.keys())
+
+	comment_embeddings = np.stack(
+		batch[uname]['comments']['encoded'] for uname in usernames)
+	comment_lengths = normalize(
+		[get_avg_comment_length(batch[uname]) for uname in usernames])
+
+	comment_firsttime = np.array(
+		[batch[uname]['comments']['times'][0] for uname in usernames])
+	comment_lasttime = np.array(
+		[batch[uname]['comments']['times'][-1] for uname in usernames])
+	comment_timediff = normalize(comment_lasttime - comment_firsttime)
+
+	events = np.array([get_events(batch[uname]) for uname in usernames])
+
+	t = (events[:, :, 0].astype('float') - comment_lasttime[:, np.newaxis])
+
+	if t.min() < 0:
+		print('Warning: found t value less than zero')
+
+	t = (t + 60 * 60) / (60 * 60 * 24 * 30) # pad with 1 hour and convert to months
+
+	#print('min t is %.2f and max t is %.2f' % (t.min(), t.max()))
+	s = (events[:, :, 1] == 'event_time').astype('float')
+	
+	x_variable_length = comment_embeddings
+	x_fixed_length = np.stack([comment_lengths, comment_timediff]).T
+	
+	return x_variable_length, x_fixed_length, t, s
 
 
 def sample_gumbel(shape, eps=1e-10):
