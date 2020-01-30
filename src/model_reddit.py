@@ -32,9 +32,9 @@ class CFTModelReddit:
 	def train(self, sess,
 			  train_files,
 			  val_files,
-			  max_epochs, max_epochs_no_improve=0,
+			  max_epochs, max_epochs_no_improve=1,
 			  learning_rate=1e-3,
-			  batch_size=300, batch_eval_freq=10,
+			  batch_size=300, batch_eval_freq=1,
 			  verbose=False):
 
 		self.n_outputs = 9
@@ -62,7 +62,7 @@ class CFTModelReddit:
 
 			for batch_idx, batch_file in enumerate(train_files):
 
-				xvb, xfb, tb, sb = load_batch(batch_file)
+				xvb, xfb, cb, tb, sb = load_batch(batch_file)
 
 				lgnrm_nlogp_, lgnrm_nlogs_, unif_nlogs_, _ = sess.run(
 					[self.lgnrm_nlogp, self.lgnrm_nlogs, self.unif_nlogs, self.train_op],
@@ -87,7 +87,7 @@ class CFTModelReddit:
 
 			for val_batch_idx, batch_file in enumerate(val_files):
 
-				xvb, xfb, tb, sb = load_batch(batch_file)
+				xvb, xfb, cb, tb, sb = load_batch(batch_file)
 
 				current_val_stats.append(
 					self._get_train_stats(
@@ -95,15 +95,13 @@ class CFTModelReddit:
 
 			val_stats.append((idx, ) + tuple(np.mean(current_val_stats, axis=0)))
 
-			if epoch_idx % 10 == 0:
+			print('Completed Epoch %i' % epoch_idx)
 
-				print('Completed Epoch %i' % epoch_idx)
-
-				if verbose:
-					self._summarize(
-						np.mean(train_stats[-batches_per_epoch:], axis=0),
-						val_stats[-1],
-						batches_per_epoch)
+			if verbose:
+				self._summarize(
+					np.mean(train_stats[-batches_per_epoch:], axis=0),
+					val_stats[-1],
+					batches_per_epoch)
 
 			if val_stats[-1][1] < best_val_nloglik:
 				best_val_nloglik = val_stats[-1][1]
@@ -353,18 +351,36 @@ class CFTModelReddit:
 		print('t_mu: %.2e' % val_stats[2], 't_logvar: %.2e\n' % val_stats[3])
 
 
-	def predict_c(self, sess, xv_test, xf_test):
+	def predict_c_and_t(self, sess, filenames):
 
-		return sess.run(
-			self.c_probs,
-			feed_dict={self.xv: xv_test, self.xf: xf_test})
+		c_probs = []
+		t_pred = []
+		c = []
+		t = []
+		s = []
 
+		for idx, batch_file in enumerate(filenames):
 
-	def predict_t(self, sess, xv_test, xf_test):
+			xvb, xfb, cb, tb, sb = load_batch(batch_file)
 
-		return sess.run(
-			self.t_pred,
-			feed_dict={self.xv: xv_test, self.xf: xf_test})
+			c_probs_, t_pred_ = sess.run(
+				[self.c_probs, self.t_pred],
+				feed_dict={self.xv: xvb, self.xf: xfb})
+
+			c_probs.append(c_probs_)
+			t_pred.append(t_pred_)
+
+			c.append(cb)
+			t.append(tb)
+			s.append(sb)
+
+		c_probs = np.concatenate(c_probs, axis=0)
+		t_pred = np.concatenate(t_pred, axis=0)
+		c = np.concatenate(c, axis=0)
+		t = np.concatenate(t, axis=0)
+		s = np.concatenate(s, axis=0)
+
+		return c_probs, t_pred, c, t, s
 
 
 	def get_c_weights(self, sess):
@@ -476,12 +492,18 @@ def load_batch(fn):
 	t = (t + 60 * 60) / (60 * 60 * 24 * 30) # pad with 1 hour and convert to months
 
 	#print('min t is %.2f and max t is %.2f' % (t.min(), t.max()))
-	s = (events[:, :, 1] == 'event_time').astype('float')
+	c = (events[:, :, 1] == 'event_time').astype('float')
+
+	all_event_times = t.flatten()[c.flatten() == 1]
+	simulated_censoring_times = np.random.rand(*np.shape(t)) * all_event_times.mean() * 2
+
+	s = ((t < simulated_censoring_times) & (c == 1)).astype('float')
+	t = np.minimum(t, simulated_censoring_times)
 	
 	x_variable_length = comment_embeddings
 	x_fixed_length = np.stack([comment_lengths, comment_timediff]).T
 	
-	return x_variable_length, x_fixed_length, t, s
+	return x_variable_length, x_fixed_length, c, t, s
 
 
 def sample_gumbel(shape, eps=1e-10):
