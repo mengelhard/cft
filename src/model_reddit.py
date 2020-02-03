@@ -66,7 +66,7 @@ class CFTModelReddit:
 
 				lgnrm_nlogp_, lgnrm_nlogs_, unif_nlogs_, _ = sess.run(
 					[self.lgnrm_nlogp, self.lgnrm_nlogs, self.unif_nlogs, self.train_op],
-					feed_dict={self.xv: xvb, self.xf: xfb, self.t: tb, self.s: sb})
+					feed_dict={self.xv: xvb, self.xf: xfb, self.t: tb, self.s: sb, self.is_training: True})
 
 				if np.isnan(np.mean(lgnrm_nlogp_)):
 					print('Warning: lgnrm_nlogp is NaN')
@@ -261,6 +261,10 @@ class CFTModelReddit:
 			shape=(None, self.n_outputs),
 			dtype=tf.float32)
 
+		self.is_training = tf.placeholder(
+			shape=(),
+			dtype=tf.bool)
+
 
 	def _build_x(self):
 
@@ -284,6 +288,7 @@ class CFTModelReddit:
 			hidden_layer = mlp(
 				h, self.encoder_layer_sizes,
 				dropout_pct=self.dropout_pct,
+				training=self.is_training,
 				activation_fn=self.activation_fn)
 
 			logits = tf.layers.dense(
@@ -307,6 +312,7 @@ class CFTModelReddit:
 				h, self.decoder_layer_sizes,
 				dropout_pct=self.dropout_pct,
 				activation_fn=self.activation_fn,
+				training=self.is_training,
 				reuse=reuse)
 
 			mu = tf.layers.dense(
@@ -338,7 +344,7 @@ class CFTModelReddit:
 			[self.nll,
 			 self.t_mu,
 			 self.t_logvar],
-			feed_dict={self.xv: xvs, self.xf: xfs, self.t: ts, self.s:ss})
+			feed_dict={self.xv: xvs, self.xf: xfs, self.t: ts, self.s:ss, self.is_training: False})
 
 		return nloglik, np.mean(mean), np.mean(logvar)
 
@@ -365,7 +371,7 @@ class CFTModelReddit:
 
 			c_probs_, t_pred_ = sess.run(
 				[self.c_probs, self.t_pred],
-				feed_dict={self.xv: xvb, self.xf: xfb})
+				feed_dict={self.xv: xvb, self.xf: xfb, self.is_training: False})
 
 			c_probs.append(c_probs_)
 			t_pred.append(t_pred_)
@@ -391,6 +397,7 @@ class CFTModelReddit:
 def mlp(x, hidden_layer_sizes,
 		dropout_pct = 0.,
 		activation_fn=tf.nn.relu,
+		training=True,
 		reuse=False):
 
 	hidden_layer = x
@@ -408,6 +415,7 @@ def mlp(x, hidden_layer_sizes,
 			if dropout_pct > 0:
 				hidden_layer = tf.layers.dropout(
 					hidden_layer, rate=dropout_pct,
+					training=training,
 					name='dropout_%i' % i)
 
 	return hidden_layer
@@ -495,7 +503,8 @@ def load_batch(fn):
 	c = (events[:, :, 1] == 'event_time').astype('float')
 
 	all_event_times = t.flatten()[c.flatten() == 1]
-	simulated_censoring_times = np.random.rand(*np.shape(t)) * all_event_times.median() * 2
+	simulated_censoring_times = np.random.rand(*np.shape(t)) * np.median(
+		all_event_times) * 2.5 + 1e-5
 
 	s = ((t < simulated_censoring_times) & (c == 1)).astype('float')
 	t = np.minimum(t, simulated_censoring_times)

@@ -73,7 +73,7 @@ class CFTModel:
 
 				lgnrm_nlogp_, lgnrm_nlogs_, unif_nlogs_, _ = sess.run(
 					[self.lgnrm_nlogp, self.lgnrm_nlogs, self.unif_nlogs, self.train_op],
-					feed_dict={self.x: xb, self.t: tb, self.s: sb})
+					feed_dict={self.x: xb, self.t: tb, self.s: sb, self.is_training: True})
 
 				if np.isnan(np.mean(lgnrm_nlogp_)):
 					print('Warning: lgnrm_nlogp is NaN')
@@ -255,6 +255,10 @@ class CFTModel:
 			shape=(None, self.n_outputs),
 			dtype=tf.float32)
 
+		self.is_training = tf.placeholder(
+			shape=(),
+			dtype=tf.bool)
+
 
 	def _encoder(self, h):
 
@@ -263,6 +267,7 @@ class CFTModel:
 			hidden_layer = mlp(
 				h, self.encoder_layer_sizes,
 				dropout_pct=self.dropout_pct,
+				training=self.is_training,
 				activation_fn=self.activation_fn)
 
 			logits = tf.layers.dense(
@@ -286,6 +291,7 @@ class CFTModel:
 				h, self.decoder_layer_sizes,
 				dropout_pct=self.dropout_pct,
 				activation_fn=self.activation_fn,
+				training=self.is_training,
 				reuse=reuse)
 
 			mu = tf.layers.dense(
@@ -317,7 +323,7 @@ class CFTModel:
 			[self.nll,
 			 self.t_mu,
 			 self.t_logvar],
-			feed_dict={self.x: xs, self.t: ts, self.s:ss})
+			feed_dict={self.x: xs, self.t: ts, self.s:ss, self.is_training: False})
 
 		return nloglik, np.mean(mean), np.mean(logvar)
 
@@ -332,12 +338,12 @@ class CFTModel:
 
 	def predict_c(self, sess, x_test):
 
-		return sess.run(self.c_probs, feed_dict={self.x: x_test})
+		return sess.run(self.c_probs, feed_dict={self.x: x_test, self.is_training: False})
 
 
 	def predict_t(self, sess, x_test):
 
-		return sess.run(self.t_pred, feed_dict={self.x: x_test})
+		return sess.run(self.t_pred, feed_dict={self.x: x_test, self.is_training: False})
 
 
 	def get_c_weights(self, sess):
@@ -348,6 +354,7 @@ class CFTModel:
 def mlp(x, hidden_layer_sizes,
 		dropout_pct = 0.,
 		activation_fn=tf.nn.relu,
+		training=True,
 		reuse=False):
 
 	hidden_layer = x
@@ -365,6 +372,7 @@ def mlp(x, hidden_layer_sizes,
 			if dropout_pct > 0:
 				hidden_layer = tf.layers.dropout(
 					hidden_layer, rate=dropout_pct,
+					training=training,
 					name='dropout_%i' % i)
 
 	return hidden_layer

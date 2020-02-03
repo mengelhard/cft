@@ -44,7 +44,7 @@ class CFTModelMimic:
 			  verbose=False):
 
 		self.n_outputs = 10
-		self.n_features = 'None'
+		self.n_features = 346
 		self.opt = tf.train.AdamOptimizer(learning_rate)
 		self._build_placeholders()
 
@@ -75,7 +75,7 @@ class CFTModelMimic:
 
 				lgnrm_nlogp_, lgnrm_nlogs_, unif_nlogs_, _ = sess.run(
 					[self.lgnrm_nlogp, self.lgnrm_nlogs, self.unif_nlogs, self.train_op],
-					feed_dict={self.x: cb, self.t: tb, self.s: sb})
+					feed_dict={self.x: xb, self.t: tb, self.s: sb, self.is_training: True})
 
 				if np.isnan(np.mean(lgnrm_nlogp_)):
 					print('Warning: lgnrm_nlogp is NaN')
@@ -266,6 +266,10 @@ class CFTModelMimic:
 			shape=(None, self.n_outputs),
 			dtype=tf.float32)
 
+		self.is_training = tf.placeholder(
+			shape=(),
+			dtype=tf.bool)
+
 
 	def _encoder(self, h):
 
@@ -274,6 +278,7 @@ class CFTModelMimic:
 			hidden_layer = mlp(
 				h, self.encoder_layer_sizes,
 				dropout_pct=self.dropout_pct,
+				training=self.is_training,
 				activation_fn=self.activation_fn)
 
 			logits = tf.layers.dense(
@@ -297,6 +302,7 @@ class CFTModelMimic:
 				h, self.decoder_layer_sizes,
 				dropout_pct=self.dropout_pct,
 				activation_fn=self.activation_fn,
+				training=self.is_training,
 				reuse=reuse)
 
 			mu = tf.layers.dense(
@@ -328,7 +334,7 @@ class CFTModelMimic:
 			[self.nll,
 			 self.t_mu,
 			 self.t_logvar],
-			feed_dict={self.x: xs, self.t: ts, self.s:ss})
+			feed_dict={self.x: xs, self.t: ts, self.s:ss, self.is_training: False})
 
 		return nloglik, np.mean(mean), np.mean(logvar)
 
@@ -355,7 +361,7 @@ class CFTModelMimic:
 
 			c_probs_, t_pred_ = sess.run(
 				[self.c_probs, self.t_pred],
-				feed_dict={self.x: xb})
+				feed_dict={self.x: xb, self.is_training: False})
 
 			c_probs.append(c_probs_)
 			t_pred.append(t_pred_)
@@ -376,6 +382,7 @@ class CFTModelMimic:
 def mlp(x, hidden_layer_sizes,
 		dropout_pct = 0.,
 		activation_fn=tf.nn.relu,
+		training=True,
 		reuse=False):
 
 	hidden_layer = x
@@ -393,6 +400,7 @@ def mlp(x, hidden_layer_sizes,
 			if dropout_pct > 0:
 				hidden_layer = tf.layers.dropout(
 					hidden_layer, rate=dropout_pct,
+					training=training,
 					name='dropout_%i' % i)
 
 	return hidden_layer
@@ -467,7 +475,7 @@ def normalize(arr, epsilon=1e-4):
 	return (a - a.mean()) / np.sqrt(a.var() + epsilon)
 
 
-def load_batch(file_idx, edict, fdict, asframe=False, normalize=True):
+def load_features(file_idx, fdict, asframe=False, normalize=True):
 
 	chartevents = pd.read_csv(os.path.join(MIMIC_DIR, 'chartevents_%i.csv' % file_idx),
 		usecols=['HADM_ID', 'ITEMID', 'CHARTTIME_HOURS', 'VALUENUM'],
@@ -481,25 +489,25 @@ def load_batch(file_idx, edict, fdict, asframe=False, normalize=True):
 		usecols=['HADM_ID', 'ITEMID', 'CHARTTIME_HOURS', 'VALUENUM'],
 		dtype={'HADM_ID': int, 'ITEMID': int, 'CHARTTIME_HOURS': float, 'VALUENUM': float})
 
-	chartfeatures_numeric = get_features(
+	chartfeatures_numeric = create_features(
 		chartevents,
 		fdict['chartevents_numeric'],
 		['count', 'mean', 'min', 'max'],
 		normalize=normalize)
 
-	chartfeatures_nonnumeric = get_features(
+	chartfeatures_nonnumeric = create_features(
 		chartevents,
 		fdict['chartevents_nonnumeric'],
 		['count'],
 		normalize=normalize)
 
-	labfeatures = get_features(
+	labfeatures = create_features(
 		labevents,
 		fdict['labevents'],
 		['count', 'mean', 'min', 'max'],
 		normalize=normalize)
 
-	outputfeatures = get_features(
+	outputfeatures = create_features(
 		outputevents,
 		fdict['outputevents'],
 		['count', 'sum'],
@@ -512,7 +520,31 @@ def load_batch(file_idx, edict, fdict, asframe=False, normalize=True):
 
 	features = features.fillna(0.) # for ids with no features e.g. in outputfeatures
 
-	hadm_ids = features.index.values
+	if asframe:
+		return features.index.values, features
+	else:
+		return features.index.values, features.values
+
+
+def load_batch(file_idx, edict, fdict,
+			   asframe=False, normalize=True,
+			   frompickle=True):
+
+	if frompickle:
+
+		assert not asframe
+
+		features = load_pickle(
+			os.path.join(MIMIC_DIR, 'all_features_%i.pickle' % file_idx))
+
+		hadm_ids = load_pickle(
+			os.path.join(MIMIC_DIR, 'hadm_ids_%i.pickle' % file_idx))
+
+	else:
+
+		features, hadm_ids = load_features(
+			file_idx, fdict,
+			asframe=asframe, normalize=normalize)
 
 	events = np.array([get_events(edict[hadm_id]) for hadm_id in hadm_ids])
 
@@ -523,18 +555,21 @@ def load_batch(file_idx, edict, fdict, asframe=False, normalize=True):
 		print('Warning: found t value less than zero')
 
 	all_event_times = t.flatten()[c.flatten() == 1]
-	simulated_censoring_times = np.random.rand(*np.shape(t)) * all_event_times.median() * 2 + 1e-2
+	simulated_censoring_times = np.random.rand(*np.shape(t)) * np.median(
+		all_event_times) * 2.5 + 1e-2
 
 	s = ((t < simulated_censoring_times) & (c == 1)).astype('float')
 	t = np.minimum(t, simulated_censoring_times)
 
 	if asframe:
 		return features, c, t, s
+	elif frompickle:
+		return features, c, t, s
 	else:
 		return features.values, c, t, s
 
 
-def get_features(df, item_ids, feature_types, normalize=True):
+def create_features(df, item_ids, feature_types, normalize=True):
 
 	feature_cols = ['%s_%s' % (f, i) for f in feature_types for i in item_ids]
 
