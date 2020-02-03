@@ -39,7 +39,7 @@ def main():
 
 	for hidden_layer_sizes in [(100, ), (500, )]:
 		for i in range(3):
-			for model_type in ['c_mlp', 'survival', 's_mlp']:
+			for model_type in ['survival', 'c_mlp', 's_mlp']:
 
 				print('Running c_mlp with layers', hidden_layer_sizes)
 

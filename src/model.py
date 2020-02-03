@@ -389,9 +389,9 @@ def lognormal_nlogpdf(t, mu, logvar, epsilon=1e-4):
 	return logt - normal_dist.log_prob(logt)
 
 
-def lognormal_nlogsurvival(t, mu, logvar):
+def lognormal_nlogsurvival(t, mu, logvar, epsilon=1e-4):
 
-	logt = tf.log(t + EPS)
+	logt = tf.log(t + epsilon)
 	scale = tf.exp(0.5 * logvar)
 
 	normal_dist = tf.distributions.Normal(
