@@ -25,7 +25,7 @@ def main():
 	results_fn = os.path.join(
 		os.path.split(os.getcwd())[0],
 		'results',
-		'mimic_gs_' + utc + '.csv')
+		'mimic_' + utc + '.csv')
 
 	head = ['status', 'fpr', 'n_samples', 'gs_temperature',
 			'hidden_layer_size', 'estimator', 'n_iter',
@@ -86,6 +86,8 @@ def main():
 
 			with open(results_fn, 'a') as results_file:
 				print(', '.join(results), file=results_file)
+
+			print('Run complete with status:', status)
 
 
 def train_cft(model_params, train_indices, val_indices, test_indices):

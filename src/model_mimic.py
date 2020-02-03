@@ -5,8 +5,8 @@ import pickle
 import os
 from datetime import datetime
 
-MIMIC_DIR = '/Users/mme/projects/cft/data/mimic'
-#MIMIC_DIR = '/scratch/mme4/mimic/batches'
+#MIMIC_DIR = '/Users/mme/projects/cft/data/mimic'
+MIMIC_DIR = '/scratch/mme4/mimic_batches'
 
 TIME_FMT = '%Y-%m-%d %H:%M:%S'
 
@@ -64,14 +64,15 @@ class CFTModelMimic:
 
 		batches_per_epoch = len(train_file_indices)
 
-		event_dict = load_pickle(os.path.join(MIMIC_DIR, 'events.pickle'))
-		feature_dict = load_pickle(os.path.join(MIMIC_DIR, 'itemid_dict.pickle'))
+		self.event_dict = load_pickle(os.path.join(MIMIC_DIR, 'events.pickle'))
+		self.feature_dict = load_pickle(os.path.join(MIMIC_DIR, 'itemid_dict.pickle'))
 
 		for epoch_idx in range(max_epochs):
 
 			for batch_idx, batch_file_idx in enumerate(train_file_indices):
 
-				xb, cb, tb, sb = load_batch(batch_file_idx, event_dict, feature_dict)
+				xb, cb, tb, sb = load_batch(
+					batch_file_idx, self.event_dict, self.feature_dict)
 
 				lgnrm_nlogp_, lgnrm_nlogs_, unif_nlogs_, _ = sess.run(
 					[self.lgnrm_nlogp, self.lgnrm_nlogs, self.unif_nlogs, self.train_op],
@@ -96,7 +97,8 @@ class CFTModelMimic:
 
 			for val_batch_idx, batch_file_idx in enumerate(val_file_indices):
 
-				xb, cb, tb, sb = load_batch(batch_file_idx, event_dict, feature_dict)
+				xb, cb, tb, sb = load_batch(batch_file_idx,
+					self.event_dict, self.feature_dict)
 
 				current_val_stats.append(
 					self._get_train_stats(
@@ -347,7 +349,7 @@ class CFTModelMimic:
 		print('t_mu: %.2e' % val_stats[2], 't_logvar: %.2e\n' % val_stats[3])
 
 
-	def predict_c_and_t(self, sess, filenames):
+	def predict_c_and_t(self, sess, batch_indices):
 
 		c_probs = []
 		t_pred = []
@@ -355,9 +357,10 @@ class CFTModelMimic:
 		t = []
 		s = []
 
-		for idx, batch_file in enumerate(filenames):
+		for idx, batch_file in enumerate(batch_indices):
 
-			xb, cb, tb, sb = load_batch(batch_file)
+			xb, cb, tb, sb = load_batch(batch_file_idx,
+				self.event_dict, self.feature_dict)
 
 			c_probs_, t_pred_ = sess.run(
 				[self.c_probs, self.t_pred],
