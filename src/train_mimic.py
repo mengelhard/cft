@@ -1,7 +1,6 @@
 import numpy as np
 import pandas as pd
 import tensorflow as tf
-import matplotlib.pyplot as plt
 import itertools
 import datetime
 import os
@@ -9,7 +8,6 @@ import os
 from sklearn.metrics import roc_auc_score
 
 from model_mimic import CFTModelMimic
-#from baselines_mimic import SurvivalModel, PosNegModel
 
 
 def main():
@@ -62,7 +60,7 @@ def main():
 
 		print('running with params:', params)
 
-		for i in range(5):
+		for i in range(3):
 
 			try:
 				n_iter, final_train_nll, final_val_nll, aucs = train_cft(
@@ -115,7 +113,7 @@ def train_cft(model_params, train_indices, val_indices, test_indices):
 	final_train_nll = train_stats[1][-1]
 	final_val_nll = val_stats[1][-1]
 
-	aucs = [roc_auc_score(c_val[:, i], c_pred_cft[:, i]) for i in range(9)]
+	aucs = [roc_auc_score(c_val[:, i], c_pred_cft[:, i]) for i in range(np.shape(c_val)[1])]
 
 	return n_iter, final_train_nll, final_val_nll, aucs
 

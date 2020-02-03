@@ -5,8 +5,8 @@ import pickle
 import os
 from datetime import datetime
 
-#MIMIC_DIR = '/Users/mme/projects/cft/data/mimic'
-MIMIC_DIR = '/scratch/mme4/mimic_batches'
+MIMIC_DIR = '/Users/mme/projects/cft/data/mimic'
+#MIMIC_DIR = '/scratch/mme4/mimic_batches'
 
 TIME_FMT = '%Y-%m-%d %H:%M:%S'
 
@@ -319,9 +319,7 @@ class CFTModelMimic:
 				name='logvar',
 				reuse=reuse)
 
-		self.t_pred = tf.exp(mu + tf.random_normal(
-			shape=tf.shape(logvar),
-			dtype=tf.float32) * tf.exp(.05 * logvar))
+		self.t_pred = tf.exp(mu)
 
 		self.decoder_vars = tf.get_collection(
 			tf.GraphKeys.GLOBAL_VARIABLES,
