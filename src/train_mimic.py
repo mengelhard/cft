@@ -34,58 +34,48 @@ def main():
 	with open(results_fn, 'w+') as results_file:
 		print(', '.join(head), file=results_file)
 
-	param_options = {
-		'fpr': [1., .5],
-		'n_samples': [100],
-		'gs_temperature': [.3, 1.],
-		'hidden_layer_size': [100, 500],
-		'estimator': ['gs', 'arm']
-	}
+	params = dict()
 
-	for params_list in itertools.product(
-		param_options['fpr'],
-		param_options['n_samples'],
-		param_options['gs_temperature'],
-		param_options['hidden_layer_size'],
-		param_options['estimator']):
+	for i in range(25):
 
-		params = {
-			'fpr': params_list[0],
-			'n_samples': params_list[1],
-			'gs_temperature': params_list[2],
-			'encoder_layer_sizes': (params_list[3], ),
-			'decoder_layer_sizes': (params_list[3], ),
-			'estimator': params_list[4]
-		}
+		params['fpr'] = np.random.rand() + 1e-3
+		params['n_samples'] = int(np.random.rand() * 100 + 20)
+		params['gs_temperature'] = np.random.rand() + 1e-2
+		hidden_layer_size = int(np.random.rand() * 1000 + 100)
+		params['encoder_layer_sizes'] = (hidden_layer_size, )
+		params['decoder_layer_sizes'] = (hidden_layer_size, )
+
+		if i < 20:
+			params['estimator'] = 'gs'
+		else:
+			params['estimator'] = 'none'
 
 		print('running with params:', params)
 
-		for i in range(3):
+		try:
+			n_iter, final_train_nll, final_val_nll, aucs = train_cft(
+				params, train_indices, val_indices, test_indices)
+			mean_auc = np.mean(aucs)
+			status = 'complete'
 
-			try:
-				n_iter, final_train_nll, final_val_nll, aucs = train_cft(
-					params, train_indices, val_indices, test_indices)
-				mean_auc = np.mean(aucs)
-				status = 'complete'
+		except:
+			n_iter, final_train_nll, final_val_nll, mean_auc = [np.nan] * 4
+			aucs = [np.nan] * 10
+			status = 'failed'
 
-			except:
-				n_iter, final_train_nll, final_val_nll, mean_auc = [np.nan] * 4
-				aucs = [np.nan] * 10
-				status = 'failed'
+		results = [status, params['fpr'], params['n_samples'],
+				   params['gs_temperature'],
+				   params['encoder_layer_sizes'][0],
+				   params['estimator'],
+				   n_iter, final_train_nll,
+				   final_val_nll, mean_auc] + aucs
 
-			results = [status, params['fpr'], params['n_samples'],
-					   params['gs_temperature'],
-					   params['encoder_layer_sizes'][0],
-					   params['estimator'],
-					   n_iter, final_train_nll,
-					   final_val_nll, mean_auc] + aucs
+		results = [str(r) for r in results]
 
-			results = [str(r) for r in results]
+		with open(results_fn, 'a') as results_file:
+			print(', '.join(results), file=results_file)
 
-			with open(results_fn, 'a') as results_file:
-				print(', '.join(results), file=results_file)
-
-			print('Run complete with status:', status)
+		print('Run complete with status:', status)
 
 
 def train_cft(model_params, train_indices, val_indices, test_indices):
