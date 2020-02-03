@@ -6,6 +6,7 @@ import datetime
 import os
 
 from sklearn.metrics import roc_auc_score
+from lifelines.utils import concordance_index
 
 from model_mimic import CFTModelMimic
 
@@ -18,6 +19,8 @@ def main():
 	val_indices = batch_indices[86:114]
 	test_indices = batch_indices[114:]
 
+	n_outputs = 10
+
 	utc = datetime.datetime.utcnow().strftime('%s')
 
 	results_fn = os.path.join(
@@ -27,9 +30,11 @@ def main():
 
 	head = ['status', 'fpr', 'n_samples', 'gs_temperature',
 			'hidden_layer_size', 'estimator', 'n_iter',
-			'final_train_nll', 'final_val_nll',
-			'mean_auc', 'auc0', 'auc1', 'auc2', 'auc3',
-			'auc4', 'auc5', 'auc6', 'auc7', 'auc8' ,'auc9']
+			'final_train_nll', 'final_val_nll']
+	head += ['mean_auc'] + [('auc%i' % i) for i in range (n_outputs)]
+	head += ['mean_raem'] + [('raem%i' % i) for i in range(n_outputs)]
+	head += ['mean_raea'] + [('raea%i' % i) for i in range(n_outputs)]
+	head += ['mean_ci'] + [('ci%i' % i) for i in range(n_outputs)]
 
 	with open(results_fn, 'w+') as results_file:
 		print(', '.join(head), file=results_file)
@@ -39,9 +44,11 @@ def main():
 	for i in range(25):
 
 		params['fpr'] = np.random.rand() + 1e-3
-		params['n_samples'] = int(np.random.rand() * 100 + 20)
+		#params['n_samples'] = int(np.random.rand() * 100 + 20)
+		params['n_samples'] = 5
 		params['gs_temperature'] = np.random.rand() + 1e-2
-		hidden_layer_size = int(np.random.rand() * 1000 + 100)
+		#hidden_layer_size = int(np.random.rand() * 1000 + 100)
+		hidden_layer_size = 10
 		params['encoder_layer_sizes'] = (hidden_layer_size, )
 		params['decoder_layer_sizes'] = (hidden_layer_size, )
 
@@ -52,23 +59,29 @@ def main():
 
 		print('running with params:', params)
 
-		try:
-			n_iter, final_train_nll, final_val_nll, aucs = train_cft(
-				params, train_indices, val_indices, test_indices)
-			mean_auc = np.mean(aucs)
-			status = 'complete'
+		#try:
+		n_iter, final_train_nll, final_val_nll, aucs, raes_median, raes_all, cis = train_cft(
+			params, train_indices, val_indices, test_indices)
+		status = 'complete'
 
-		except:
-			n_iter, final_train_nll, final_val_nll, mean_auc = [np.nan] * 4
-			aucs = [np.nan] * 10
-			status = 'failed'
+		# except:
+		# 	n_iter, final_train_nll, final_val_nll = [np.nan] * 3
+		# 	aucs = [np.nan] * n_outputs
+		# 	raes_median = [np.nan] * n_outputs
+		# 	raes_all = [np.nan] * n_outputs
+		# 	cis = [np.nan] * n_outputs
+		# 	status = 'failed'
 
 		results = [status, params['fpr'], params['n_samples'],
 				   params['gs_temperature'],
 				   params['encoder_layer_sizes'][0],
 				   params['estimator'],
 				   n_iter, final_train_nll,
-				   final_val_nll, mean_auc] + aucs
+				   final_val_nll]
+		results += [np.mean(aucs)] + aucs
+		results += [np.mean(raes_median)] + raes_median
+		results += [np.mean(raes_all)] + raes_all
+		results += [np.mean(cis)] + cis
 
 		results = [str(r) for r in results]
 
@@ -91,7 +104,7 @@ def train_cft(model_params, train_indices, val_indices, test_indices):
 	with tf.Session() as sess:
 		train_stats, val_stats = cft_mdl.train(
 			sess, train_indices, val_indices,
-			100, max_epochs_no_improve=3, learning_rate=3e-4,
+			1, max_epochs_no_improve=3, learning_rate=3e-4,
 			verbose=False)
 		c_pred_cft, t_pred_cft, c_val, t_val, s_val = cft_mdl.predict_c_and_t(
 			sess, val_indices)
@@ -103,9 +116,38 @@ def train_cft(model_params, train_indices, val_indices, test_indices):
 	final_train_nll = train_stats[1][-1]
 	final_val_nll = val_stats[1][-1]
 
-	aucs = [roc_auc_score(c_val[:, i], c_pred_cft[:, i]) for i in range(np.shape(c_val)[1])]
+	n_out = np.shape(c_val)[1]
 
-	return n_iter, final_train_nll, final_val_nll, aucs
+	aucs = [roc_auc_score(c_val[:, i], c_pred_cft[:, i]) for i in range(n_out)]
+	raes = [rae_over_samples(t_val[:, i], s_val[:, i], t_pred_cft[..., i]) for i in range(n_out)]
+	cis = [ci(t_val[:, i], s_val[:, i], t_pred_cft[..., i]) for i in range(n_out)]
+
+	raes_median, raes_all = list(zip(*raes))
+
+	return n_iter, final_train_nll, final_val_nll, aucs, list(raes_median), list(raes_all), cis
+
+
+def rae_over_samples(t_true, s, t_pred):
+
+	if t_pred.ndim > 1:
+		raes_median = rae(t_true, s, np.median(t_pred, axis=1))
+		raes_all = rae(t_true[:, np.newaxis], s, t_pred)
+		return raes_median, raes_all
+	else:
+		raes = rae(t_true, s, t_pred)
+		return raes, raes
+
+
+def rae(t_true, s, t_pred):
+	errors = (t_true - t_pred) / t_true.max()
+	return np.mean(np.concatenate([np.abs(errors[s == 1]), np.maximum(errors[s == 0], 0)]))
+
+
+def ci(t_true, s, t_pred):
+	if t_pred.ndim > 1:
+		return concordance_index(t_true, np.median(t_pred, axis=1), s)
+	else:
+		return concordance_index(t_true, t_pred, s)
 
 
 if __name__ == '__main__':
