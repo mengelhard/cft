@@ -5,8 +5,8 @@ import pickle
 import os
 from datetime import datetime
 
-MIMIC_DIR = '/Users/mme/projects/cft/data/mimic'
-#MIMIC_DIR = '/scratch/mme4/mimic_batches'
+#MIMIC_DIR = '/Users/mme/projects/cft/data/mimic'
+MIMIC_DIR = '/scratch/mme4/mimic_batches'
 
 TIME_FMT = '%Y-%m-%d %H:%M:%S'
 

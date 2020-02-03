@@ -44,11 +44,11 @@ def main():
 	for i in range(25):
 
 		params['fpr'] = np.random.rand() + 1e-3
-		#params['n_samples'] = int(np.random.rand() * 100 + 20)
-		params['n_samples'] = 5
+		params['n_samples'] = int(np.random.rand() * 100 + 20)
+		#params['n_samples'] = 5
 		params['gs_temperature'] = np.random.rand() + 1e-2
-		#hidden_layer_size = int(np.random.rand() * 1000 + 100)
-		hidden_layer_size = 10
+		hidden_layer_size = int(np.random.rand() * 1000 + 100)
+		#hidden_layer_size = 10
 		params['encoder_layer_sizes'] = (hidden_layer_size, )
 		params['decoder_layer_sizes'] = (hidden_layer_size, )
 
@@ -59,18 +59,18 @@ def main():
 
 		print('running with params:', params)
 
-		#try:
-		n_iter, final_train_nll, final_val_nll, aucs, raes_median, raes_all, cis = train_cft(
-			params, train_indices, val_indices, test_indices)
-		status = 'complete'
+		try:
+			n_iter, final_train_nll, final_val_nll, aucs, raes_median, raes_all, cis = train_cft(
+				params, train_indices, val_indices, test_indices)
+			status = 'complete'
 
-		# except:
-		# 	n_iter, final_train_nll, final_val_nll = [np.nan] * 3
-		# 	aucs = [np.nan] * n_outputs
-		# 	raes_median = [np.nan] * n_outputs
-		# 	raes_all = [np.nan] * n_outputs
-		# 	cis = [np.nan] * n_outputs
-		# 	status = 'failed'
+		except:
+			n_iter, final_train_nll, final_val_nll = [np.nan] * 3
+			aucs = [np.nan] * n_outputs
+			raes_median = [np.nan] * n_outputs
+			raes_all = [np.nan] * n_outputs
+			cis = [np.nan] * n_outputs
+			status = 'failed'
 
 		results = [status, params['fpr'], params['n_samples'],
 				   params['gs_temperature'],
@@ -104,7 +104,7 @@ def train_cft(model_params, train_indices, val_indices, test_indices):
 	with tf.Session() as sess:
 		train_stats, val_stats = cft_mdl.train(
 			sess, train_indices, val_indices,
-			1, max_epochs_no_improve=3, learning_rate=3e-4,
+			100, max_epochs_no_improve=3, learning_rate=3e-4,
 			verbose=False)
 		c_pred_cft, t_pred_cft, c_val, t_val, s_val = cft_mdl.predict_c_and_t(
 			sess, val_indices)
