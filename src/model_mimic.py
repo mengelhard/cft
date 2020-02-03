@@ -357,7 +357,7 @@ class CFTModelMimic:
 		t = []
 		s = []
 
-		for idx, batch_file in enumerate(batch_indices):
+		for idx, batch_file_idx in enumerate(batch_indices):
 
 			xb, cb, tb, sb = load_batch(batch_file_idx,
 				self.event_dict, self.feature_dict)
