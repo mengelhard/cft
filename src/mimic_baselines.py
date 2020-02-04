@@ -9,6 +9,7 @@ from sklearn.metrics import roc_auc_score
 
 from model import mlp, lognormal_nlogpdf, lognormal_nlogsurvival
 from model_mimic import load_batch, load_pickle
+from train_mimic import rae_over_samples, rae, ci
 
 MIMIC_DIR = '/Users/mme/projects/cft/data/mimic'
 #MIMIC_DIR = '/scratch/mme4/mimic_batches'
@@ -24,49 +25,59 @@ def main():
 
 	utc = datetime.datetime.utcnow().strftime('%s')
 
+	n_outputs = 10
+
 	results_fn = os.path.join(
 		os.path.split(os.getcwd())[0],
 		'results',
 		'mimic_baselines_' + utc + '.csv')
 
-	head = ['status', 'model_type', 'hidden_layer_size', 'n_iter',
-			'final_train_nll', 'final_val_nll',
-			'mean_auc', 'auc0', 'auc1', 'auc2', 'auc3',
-			'auc4', 'auc5', 'auc6', 'auc7', 'auc8' ,'auc9']
+	head = ['status', 'model_type', 'hidden_layer_size',
+			'n_iter', 'final_train_nll', 'final_val_nll']
+	head += ['mean_auc'] + [('auc%i' % i) for i in range (n_outputs)]
+	head += ['mean_raem'] + [('raem%i' % i) for i in range(n_outputs)]
+	head += ['mean_raea'] + [('raea%i' % i) for i in range(n_outputs)]
+	head += ['mean_ci'] + [('ci%i' % i) for i in range(n_outputs)]
 
 	with open(results_fn, 'w+') as results_file:
 		print(', '.join(head), file=results_file)
 
-	for hidden_layer_sizes in [(100, ), (500, )]:
-		for i in range(3):
-			for model_type in ['survival', 'c_mlp', 's_mlp']:
+	for i in range(3 * 10):
 
-				print('Running c_mlp with layers', hidden_layer_sizes)
+		hidden_layer_sizes = (int(np.random.rand() * 1000 + 100), )
+		model_type = ['survival', 'c_mlp', 's_mlp'][i % 3]
 
-				#try:
+		print('Running', model_type, 'with layers', hidden_layer_sizes)
 
-				n_iter, final_train_nll, final_val_nll, aucs = train_baseline(
-					model_type, hidden_layer_sizes,
-					train_indices, val_indices, test_indices)
-				
-				mean_auc = np.mean(aucs)
-				status = 'complete'
+		#try:
 
-				# except:
-				# 	n_iter, final_train_nll, final_val_nll, mean_auc = [np.nan] * 4
-				# 	aucs = [np.nan] * 10
-				# 	status = 'failed'
+		n_iter, final_train_nll, final_val_nll, aucs, raes_median, raes_all, cis = train_baseline(
+			model_type, hidden_layer_sizes,
+			train_indices, val_indices, test_indices)
+		status = 'complete'
 
-				results = [status, model_type, hidden_layer_sizes[0],
-						   n_iter, final_train_nll,
-						   final_val_nll, mean_auc] + aucs
+		# except:
+		# 	n_iter, final_train_nll, final_val_nll = [np.nan] * 3
+		# 	aucs = [np.nan] * n_outputs
+		# 	raes_median = [np.nan] * n_outputs
+		# 	raes_all = [np.nan] * n_outputs
+		# 	cis = [np.nan] * n_outputs
+		# 	status = 'failed'
 
-				results = [str(r) for r in results]
+		results = [status, model_type, hidden_layer_sizes[0],
+				   n_iter, final_train_nll,
+				   final_val_nll]
+		results += [np.nanmean(aucs)] + aucs
+		results += [np.nanmean(raes_median)] + raes_median
+		results += [np.nanmean(raes_all)] + raes_all
+		results += [np.nanmean(cis)] + cis
 
-				with open(results_fn, 'a') as results_file:
-					print(', '.join(results), file=results_file)
+		results = [str(r) for r in results]
 
-				print('Run complete with status:', status)
+		with open(results_fn, 'a') as results_file:
+			print(', '.join(results), file=results_file)
+
+		print('Run complete with status:', status)
 
 
 def train_baseline(model_type, hidden_layer_sizes, train_indices, val_indices, test_indices):
@@ -94,14 +105,22 @@ def train_baseline(model_type, hidden_layer_sizes, train_indices, val_indices, t
 	final_train_nll = train_stats[1][-1]
 	final_val_nll = val_stats[1][-1]
 
+	n_out = np.shape(c_val)[1]
+
 	if model_type is 'survival':
 		c_prob_pred = t_to_prob(predictions)
+		raes = [rae_over_samples(t_val[:, i], s_val[:, i], predictions[..., i]) for i in range(n_out)]
+		cis = [ci(t_val[:, i], s_val[:, i], predictions[..., i]) for i in range(n_out)]
+		raes_median, raes_all = list(zip(*raes))
 	else:
 		c_prob_pred = predictions
+		raes_median = [np.nan] * n_out
+		raes_all = [np.nan] * n_out
+		cis = [np.nan] * n_out
 
-	aucs = [roc_auc_score(c_val[:, i], c_prob_pred[:, i]) for i in range(np.shape(c_val)[1])]
+	aucs = [roc_auc_score(c_val[:, i], c_prob_pred[:, i]) for i in range(n_out)]
 
-	return n_iter, final_train_nll, final_val_nll, aucs
+	return n_iter, final_train_nll, final_val_nll, aucs, list(raes_median), list(raes_all), cis
 
 
 def time_to_prob(x):
