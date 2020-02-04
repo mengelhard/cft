@@ -474,7 +474,7 @@ def normalize(arr, epsilon=1e-4):
 	return (a - a.mean()) / np.sqrt(a.var() + epsilon)
 
 
-def load_batch(fn):
+def load_batch(fn, censoring_factor=2.):
 	
 	batch = load_pickle(fn)
 	usernames = list(batch.keys())
@@ -502,9 +502,10 @@ def load_batch(fn):
 	#print('min t is %.2f and max t is %.2f' % (t.min(), t.max()))
 	c = (events[:, :, 1] == 'event_time').astype('float')
 
-	all_event_times = t.flatten()[c.flatten() == 1]
-	simulated_censoring_times = np.random.rand(*np.shape(t)) * np.median(
-		all_event_times) * 2. + 1e-5
+	median_event_times = [np.median(t[:, i][c[:, i] == 1]) for i in range(np.shape(t)[1])]
+	median_event_times = np.array(median_event_times)[np.newaxis, :]
+	simulated_censoring_times = np.random.rand(
+		*np.shape(t)) * median_event_times * censoring_factor + 1e-2
 
 	s = ((t < simulated_censoring_times) & (c == 1)).astype('float')
 	t = np.minimum(t, simulated_censoring_times)

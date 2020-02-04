@@ -15,9 +15,13 @@ def main():
 
 	batch_indices = list(range(143))
 
-	train_indices = batch_indices[:86]
-	val_indices = batch_indices[86:114]
-	test_indices = batch_indices[114:]
+	#train_indices = batch_indices[:86]
+	#val_indices = batch_indices[86:114]
+	#test_indices = batch_indices[114:]
+
+	train_indices = batch_indices[:2]
+	val_indices = batch_indices[2:4]
+	test_indices = batch_indices[4:6]
 
 	n_outputs = 10
 
@@ -41,27 +45,33 @@ def main():
 
 	params = dict()
 
-	for i in range(25):
+	for i in range(20):
 
-		params['fpr'] = np.random.rand() + 1e-3
-		params['n_samples'] = int(np.random.rand() * 100 + 20)
-		#params['n_samples'] = 5
-		params['gs_temperature'] = np.random.rand() + 1e-2
-		hidden_layer_size = int(np.random.rand() * 1000 + 100)
-		#hidden_layer_size = 10
+		censoring_factor = [2., 3.][i % 2]
+
+		#params['fpr'] = np.random.rand() + 1e-3
+		params['fpr'] = .7
+		#params['n_samples'] = int(np.random.rand() * 100 + 20)
+		params['n_samples'] = 100
+		#params['gs_temperature'] = np.random.rand() + 1e-2
+		params['gs_temperature'] = .3
+		#hidden_layer_size = int(np.random.rand() * 1000 + 100)
+		hidden_layer_size = 750
 		params['encoder_layer_sizes'] = (hidden_layer_size, )
 		params['decoder_layer_sizes'] = (hidden_layer_size, )
 
-		if i < 20:
-			params['estimator'] = 'gs'
-		else:
-			params['estimator'] = 'none'
+		params['estimator'] = 'gs'
+
+		# if i < 20:
+		# 	params['estimator'] = 'gs'
+		# else:
+		# 	params['estimator'] = 'none'
 
 		print('running with params:', params)
 
 		try:
 			n_iter, final_train_nll, final_val_nll, aucs, raes_median, raes_all, cis = train_cft(
-				params, train_indices, val_indices, test_indices)
+				params, censoring_factor, train_indices, val_indices, test_indices)
 			status = 'complete'
 
 		except:
@@ -91,7 +101,7 @@ def main():
 		print('Run complete with status:', status)
 
 
-def train_cft(model_params, train_indices, val_indices, test_indices):
+def train_cft(model_params, censoring_factor, train_indices, val_indices, test_indices):
 
 	tf.reset_default_graph()
 
@@ -99,6 +109,7 @@ def train_cft(model_params, train_indices, val_indices, test_indices):
 		fpr_likelihood=True,
 		prop_fpr=True,
 		dropout_pct=.5,
+		censoring_factor=censoring_factor,
 		**model_params)
 
 	with tf.Session() as sess:
@@ -140,7 +151,12 @@ def rae_over_samples(t_true, s, t_pred):
 
 def rae(t_true, s, t_pred):
 	errors = (t_true - t_pred) / t_true.max()
-	return np.mean(np.concatenate([np.abs(errors[s == 1]), np.maximum(errors[s == 0], 0)]))
+	errors_uncensored = np.abs(errors[s == 1].flatten())
+	errors_censored = np.maximum(errors[s == 0].flatten(), 0)
+	#print('max t is', t_true.max())
+	#print('avg error (not censored) is', np.mean(errors_uncensored))
+	#print('avg error (censored) is', np.mean(errors_censored))
+	return np.mean(np.concatenate([errors_uncensored, errors_censored]))
 
 
 def ci(t_true, s, t_pred):

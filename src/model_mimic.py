@@ -5,8 +5,8 @@ import pickle
 import os
 from datetime import datetime
 
-MIMIC_DIR = '/Users/mme/projects/cft/data/mimic'
-#MIMIC_DIR = '/scratch/mme4/mimic_batches'
+#MIMIC_DIR = '/Users/mme/projects/cft/data/mimic'
+MIMIC_DIR = '/scratch/mme4/mimic_batches'
 
 TIME_FMT = '%Y-%m-%d %H:%M:%S'
 
@@ -21,6 +21,7 @@ class CFTModelMimic:
 		fpr=5e-2,
 		fpr_likelihood=False,
 		prop_fpr=True,
+		censoring_factor=2.,
 		activation_fn=tf.nn.relu):
 
 		self.encoder_layer_sizes = encoder_layer_sizes
@@ -32,6 +33,7 @@ class CFTModelMimic:
 		self.nlog_fpr = -1 * np.log(fpr)
 		self.fpr_likelihood = fpr_likelihood
 		self.prop_fpr = prop_fpr
+		self.censoring_factor = censoring_factor
 		self.activation_fn = activation_fn
 
 
@@ -72,7 +74,8 @@ class CFTModelMimic:
 			for batch_idx, batch_file_idx in enumerate(train_file_indices):
 
 				xb, cb, tb, sb = load_batch(
-					batch_file_idx, self.event_dict, self.feature_dict)
+					batch_file_idx, self.event_dict, self.feature_dict,
+					censoring_factor=self.censoring_factor)
 
 				lgnrm_nlogp_, lgnrm_nlogs_, unif_nlogs_, _ = sess.run(
 					[self.lgnrm_nlogp, self.lgnrm_nlogs, self.unif_nlogs, self.train_op],
@@ -97,8 +100,9 @@ class CFTModelMimic:
 
 			for val_batch_idx, batch_file_idx in enumerate(val_file_indices):
 
-				xb, cb, tb, sb = load_batch(batch_file_idx,
-					self.event_dict, self.feature_dict)
+				xb, cb, tb, sb = load_batch(
+					batch_file_idx, self.event_dict, self.feature_dict,
+					censoring_factor=self.censoring_factor)
 
 				current_val_stats.append(
 					self._get_train_stats(
@@ -357,8 +361,9 @@ class CFTModelMimic:
 
 		for idx, batch_file_idx in enumerate(batch_indices):
 
-			xb, cb, tb, sb = load_batch(batch_file_idx,
-				self.event_dict, self.feature_dict)
+			xb, cb, tb, sb = load_batch(
+				batch_file_idx, self.event_dict, self.feature_dict,
+				censoring_factor=self.censoring_factor)
 
 			c_probs_, t_pred_ = sess.run(
 				[self.c_probs, self.t_pred],
@@ -529,7 +534,7 @@ def load_features(file_idx, fdict, asframe=False, normalize=True):
 
 def load_batch(file_idx, edict, fdict,
 			   asframe=False, normalize=True,
-			   frompickle=True):
+			   frompickle=True, censoring_factor=2.):
 
 	if frompickle:
 
@@ -555,12 +560,17 @@ def load_batch(file_idx, edict, fdict,
 	if t.min() < 0:
 		print('Warning: found t value less than zero')
 
-	all_event_times = t.flatten()[c.flatten() == 1]
-	simulated_censoring_times = np.random.rand(*np.shape(t)) * np.median(
-		all_event_times) * 2. + 1e-2
+	median_event_times = [np.median(t[:, i][c[:, i] == 1]) for i in range(np.shape(t)[1])]
+	#print('Median event times are:', median_event_times)
+	median_event_times = np.array(median_event_times)[np.newaxis, :]
+	simulated_censoring_times = np.random.rand(
+		*np.shape(t)) * median_event_times * censoring_factor + 1e-2
+	#print('Max censoring times are', np.amax(simulated_censoring_times, axis=0))
 
 	s = ((t < simulated_censoring_times) & (c == 1)).astype('float')
 	t = np.minimum(t, simulated_censoring_times)
+
+	#print('Max times are', np.amax(t, axis=0))
 
 	if asframe:
 		return features, c, t, s
