@@ -563,7 +563,8 @@ def load_batch(file_idx, edict, fdict,
 	if np.sum(np.isnan(t)) > 0:
 		print('Warning: found nan t value')
 
-	median_event_times = [np.nanmedian(t[:, i][c[:, i] == 1]) for i in range(np.shape(t)[1])]
+	median_event_times = np.array(
+		[np.nanmedian(t[:, i][c[:, i] == 1]) for i in range(np.shape(t)[1])])
 
 	if np.any(np.isnan(median_event_times)):
 		n_nan = np.sum(np.isnan(median_event_times))
@@ -571,7 +572,7 @@ def load_batch(file_idx, edict, fdict,
 		median_event_times[np.isnan(median_event_times)] = np.nanmean(median_event_times)
 
 	#print('Median event times are:', median_event_times)
-	median_event_times = np.array(median_event_times)[np.newaxis, :]
+	median_event_times = median_event_times[np.newaxis, :]
 	simulated_censoring_times = np.random.rand(
 		*np.shape(t)) * median_event_times * censoring_factor + 1e-2
 	#print('Max censoring times are', np.amax(simulated_censoring_times, axis=0))
