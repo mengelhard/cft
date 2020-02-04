@@ -564,6 +564,10 @@ def load_batch(file_idx, edict, fdict,
 		print('Warning: found nan t value')
 
 	median_event_times = [np.nanmedian(t[:, i][c[:, i] == 1]) for i in range(np.shape(t)[1])]
+
+	if np.any(np.isnan(median_event_times)):
+		print('Warning: found nan median value')
+		
 	#print('Median event times are:', median_event_times)
 	median_event_times = np.array(median_event_times)[np.newaxis, :]
 	simulated_censoring_times = np.random.rand(
