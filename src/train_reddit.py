@@ -1,7 +1,6 @@
 import numpy as np
 import pandas as pd
 import tensorflow as tf
-import matplotlib.pyplot as plt
 import itertools
 import datetime
 import os
@@ -9,7 +8,11 @@ import os
 from sklearn.metrics import roc_auc_score
 
 from model_reddit import CFTModelReddit
-from baselines import SurvivalModel, PosNegModel
+from train_mimic import rae_over_samples, rae, ci
+
+
+#REDDIT_DIR = '/scratch/mme4/reddit'
+REDDIT_DIR = '/Users/mme/projects/cft/data/reddit_subset'
 
 
 def main():
@@ -18,67 +21,80 @@ def main():
 
 	utc = datetime.datetime.utcnow().strftime('%s')
 
+	n_outputs = 9
+
 	results_fn = os.path.join(
 		os.path.split(os.getcwd())[0],
 		'results',
-		'reddit_gs_' + utc + '.csv')
+		'reddit_' + utc + '.csv')
 
 	head = ['status', 'fpr', 'n_samples', 'gs_temperature',
-			'n_iter', 'final_train_nll', 'final_val_nll',
-			'mean_auc', 'auc0', 'auc1', 'auc2', 'auc3',
-			'auc4', 'auc5', 'auc6', 'auc7', 'auc8']
+			'hidden_layer_size', 'estimator', 'n_iter',
+			'final_train_nll', 'final_val_nll']
+	head += ['mean_auc'] + [('auc%i' % i) for i in range (n_outputs)]
+	head += ['mean_raem'] + [('raem%i' % i) for i in range(n_outputs)]
+	head += ['mean_raea'] + [('raea%i' % i) for i in range(n_outputs)]
+	head += ['mean_ci'] + [('ci%i' % i) for i in range(n_outputs)]
 
 	with open(results_fn, 'w+') as results_file:
 		print(', '.join(head), file=results_file)
 
-	param_options = {
-		'fpr': [1., .5, .1, .01],
-		'n_samples': [30, 100],
-		'gs_temperature': [.1, .3, 1.]
-	}
+	params = dict()
 
-	for params_list in itertools.product(
-		param_options['fpr'],
-		param_options['n_samples'],
-		param_options['gs_temperature']):
+	for i in range(35):
 
-		params = {
-			'fpr': params_list[0],
-			'n_samples': params_list[1],
-			'gs_temperature': params_list[2]
-		}
+		params['fpr'] = np.random.rand() + 1e-3
+		params['n_samples'] = int(np.random.rand() * 100 + 20)
+		#params['n_samples'] = 5
+		params['gs_temperature'] = np.random.rand() + 1e-2
+		hidden_layer_size = int(np.random.rand() * 1000 + 100)
+		#hidden_layer_size = 10
+		params['encoder_layer_sizes'] = (hidden_layer_size, )
+		params['decoder_layer_sizes'] = (hidden_layer_size, )
+
+		if i < 30:
+			params['estimator'] = 'gs'
+		else:
+			params['estimator'] = 'none'
 
 		print('running with params:', params)
 
-		for i in range(5):
+		try:
+			n_iter, final_train_nll, final_val_nll, aucs, raes_median, raes_all, cis = train_cft(
+				params, train_fns, val_fns, test_fns)
+			status = 'complete'
 
-			try:
-				n_iter, final_train_nll, final_val_nll, aucs = train_cft(
-					params, train_fns, val_fns, test_fns)
-				mean_auc = np.mean(aucs)
-				status = 'complete'
+		except:
+			n_iter, final_train_nll, final_val_nll = [np.nan] * 3
+			aucs = [np.nan] * n_outputs
+			raes_median = [np.nan] * n_outputs
+			raes_all = [np.nan] * n_outputs
+			cis = [np.nan] * n_outputs
+			status = 'failed'
 
-			except:
-				n_iter, final_train_nll, final_val_nll, mean_auc = [np.nan] * 4
-				aucs = [np.nan] * 9
-				status = 'failed'
+		results = [status, params['fpr'], params['n_samples'],
+				   params['gs_temperature'],
+				   params['encoder_layer_sizes'][0],
+				   params['estimator'],
+				   n_iter, final_train_nll,
+				   final_val_nll]
+		results += [np.nanmean(aucs)] + aucs
+		results += [np.nanmean(raes_median)] + raes_median
+		results += [np.nanmean(raes_all)] + raes_all
+		results += [np.nanmean(cis)] + cis
 
-			results = [status, params['fpr'], params['n_samples'],
-					   params['gs_temperature'],
-					   n_iter, final_train_nll,
-					   final_val_nll, mean_auc] + aucs
+		results = [str(r) for r in results]
 
-			results = [str(r) for r in results]
+		with open(results_fn, 'a') as results_file:
+			print(', '.join(results), file=results_file)
 
-			with open(results_fn, 'a') as results_file:
-				print(', '.join(results), file=results_file)
+		print('Run complete with status:', status)
 
 
 def get_files():
 
 	import glob
-	filenames = glob.glob('/scratch/mme4/reddit/*.pickle')
-	#filenames = glob.glob('../data/reddit_subset/*.pickle')
+	filenames = glob.glob(REDDIT_DIR + '/*.pickle')
 	filenames = np.random.RandomState(seed=0).permutation(filenames)
 
 	print('There are %i files (approx %i total users)' % (
@@ -99,9 +115,6 @@ def train_cft(model_params, train_filenames, val_filenames, test_filenames):
 
 	cft_mdl = CFTModelReddit(
 		embedding_layer_sizes=(300,),
-		encoder_layer_sizes=(100,),
-		decoder_layer_sizes=(100,),
-		estimator='gs',
 		fpr_likelihood=True,
 		prop_fpr=True,
 		dropout_pct=.5,
@@ -110,11 +123,11 @@ def train_cft(model_params, train_filenames, val_filenames, test_filenames):
 	with tf.Session() as sess:
 		train_stats, val_stats = cft_mdl.train(
 			sess, train_filenames, val_filenames,
-			100, max_epochs_no_improve=5, learning_rate=3e-4,
+			100, max_epochs_no_improve=3, learning_rate=3e-4,
 			verbose=False)
 		c_pred_cft, t_pred_cft, c_val, t_val, s_val = cft_mdl.predict_c_and_t(
 			sess, val_filenames)
-		
+
 	train_stats = list(zip(*train_stats))
 	val_stats = list(zip(*val_stats))
 
@@ -122,9 +135,15 @@ def train_cft(model_params, train_filenames, val_filenames, test_filenames):
 	final_train_nll = train_stats[1][-1]
 	final_val_nll = val_stats[1][-1]
 
-	aucs = [roc_auc_score(c_val[:, i], c_pred_cft[:, i]) for i in range(9)]
+	n_out = np.shape(c_val)[1]
 
-	return n_iter, final_train_nll, final_val_nll, aucs
+	aucs = [roc_auc_score(c_val[:, i], c_pred_cft[:, i]) for i in range(n_out)]
+	raes = [rae_over_samples(t_val[:, i], s_val[:, i], t_pred_cft[..., i]) for i in range(n_out)]
+	cis = [ci(t_val[:, i], s_val[:, i], t_pred_cft[..., i]) for i in range(n_out)]
+
+	raes_median, raes_all = list(zip(*raes))
+
+	return n_iter, final_train_nll, final_val_nll, aucs, list(raes_median), list(raes_all), cis
 
 
 if __name__ == '__main__':

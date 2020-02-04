@@ -466,7 +466,7 @@ def get_events(user):
 	subreddits = ['ADHD', 'Anxiety', 'books', 'depression', 'Fitness',
 				  'LifeProTips', 'mentalhealth', 'SuicideWatch', 'worldnews']
 
-	return [user['events'][subreddit] for subreddit in subreddits]
+	return [user['events'].get(subreddit, (np.inf, 'no_event')) for subreddit in subreddits]
 
 
 def normalize(arr, epsilon=1e-4):
@@ -480,7 +480,7 @@ def load_batch(fn):
 	usernames = list(batch.keys())
 
 	comment_embeddings = np.stack(
-		batch[uname]['comments']['encoded'] for uname in usernames)
+		batch[uname]['comments']['embedded'] for uname in usernames)
 	comment_lengths = normalize(
 		[get_avg_comment_length(batch[uname]) for uname in usernames])
 

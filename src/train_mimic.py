@@ -78,10 +78,10 @@ def main():
 				   params['estimator'],
 				   n_iter, final_train_nll,
 				   final_val_nll]
-		results += [np.mean(aucs)] + aucs
-		results += [np.mean(raes_median)] + raes_median
-		results += [np.mean(raes_all)] + raes_all
-		results += [np.mean(cis)] + cis
+		results += [np.nanmean(aucs)] + aucs
+		results += [np.nanmean(raes_median)] + raes_median
+		results += [np.nanmean(raes_all)] + raes_all
+		results += [np.nanmean(cis)] + cis
 
 		results = [str(r) for r in results]
 
@@ -145,9 +145,16 @@ def rae(t_true, s, t_pred):
 
 def ci(t_true, s, t_pred):
 	if t_pred.ndim > 1:
-		return concordance_index(t_true, np.median(t_pred, axis=1), s)
+		try:
+			cidx = concordance_index(t_true, np.median(t_pred, axis=1), s)
+		except:
+			cidx = np.nan
 	else:
-		return concordance_index(t_true, t_pred, s)
+		try:
+			cidx = concordance_index(t_true, t_pred, s)
+		except:
+			cidx = np.nan
+	return cidx
 
 
 if __name__ == '__main__':
