@@ -504,7 +504,7 @@ def load_batch(fn):
 
 	all_event_times = t.flatten()[c.flatten() == 1]
 	simulated_censoring_times = np.random.rand(*np.shape(t)) * np.median(
-		all_event_times) * 2.5 + 1e-5
+		all_event_times) * 2. + 1e-5
 
 	s = ((t < simulated_censoring_times) & (c == 1)).astype('float')
 	t = np.minimum(t, simulated_censoring_times)
