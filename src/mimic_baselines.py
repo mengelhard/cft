@@ -42,17 +42,18 @@ def main():
 	with open(results_fn, 'w+') as results_file:
 		print(', '.join(head), file=results_file)
 
-	for i in range(3 * 10):
+	for i in range(3 * 10 * 2):
 
-		hidden_layer_sizes = (int(np.random.rand() * 1000 + 100), )
+		hidden_layer_sizes = (750, )
 		model_type = ['survival', 'c_mlp', 's_mlp'][i % 3]
+		censoring_factor = [2., 3.][i // 30]
 
 		print('Running', model_type, 'with layers', hidden_layer_sizes)
 
 		#try:
 
 		n_iter, final_train_nll, final_val_nll, aucs, raes_median, raes_all, cis = train_baseline(
-			model_type, hidden_layer_sizes,
+			model_type, hidden_layer_sizes, censoring_factor,
 			train_indices, val_indices, test_indices)
 		status = 'complete'
 
@@ -80,14 +81,20 @@ def main():
 		print('Run complete with status:', status)
 
 
-def train_baseline(model_type, hidden_layer_sizes, train_indices, val_indices, test_indices):
+def train_baseline(
+	model_type, hidden_layer_sizes, censoring_factor,
+	train_indices, val_indices, test_indices):
 
 	tf.reset_default_graph()
 
 	if model_type is 'survival':
-		mdl = SurvivalModel(decoder_layer_sizes=hidden_layer_sizes, dropout_pct=.5)
+		mdl = SurvivalModel(
+			decoder_layer_sizes=hidden_layer_sizes, dropout_pct=.5,
+			censoring_factor=censoring_factor)
 	else:
-		mdl = PosNegModel(encoder_layer_sizes=hidden_layer_sizes, dropout_pct=.5)
+		mdl = PosNegModel(
+			encoder_layer_sizes=hidden_layer_sizes, dropout_pct=.5,
+			censoring_factor=censoring_factor)
 
 	with tf.Session() as sess:
 		train_stats, val_stats = mdl.train(
@@ -96,7 +103,7 @@ def train_baseline(model_type, hidden_layer_sizes, train_indices, val_indices, t
 			max_epochs_no_improve=3, learning_rate=3e-4,
 			verbose=False)
 		predictions, c_val, t_val, s_val = mdl.predict(
-			sess, val_indices)
+			sess, test_indices)
 		
 	train_stats = list(zip(*train_stats))
 	val_stats = list(zip(*val_stats))
@@ -136,10 +143,12 @@ class SurvivalModel:
 	def __init__(self,
 		decoder_layer_sizes=(),
 		dropout_pct=0.,
+		censoring_factor=2.,
 		activation_fn=tf.nn.relu):
 
 		self.decoder_layer_sizes = decoder_layer_sizes
 		self.dropout_pct = dropout_pct
+		self.censoring_factor = censoring_factor
 		self.activation_fn = activation_fn
 
 
@@ -178,7 +187,8 @@ class SurvivalModel:
 			for batch_idx, batch_file_idx in enumerate(train_file_indices):
 
 				xb, cb, tb, sb = load_batch(
-					batch_file_idx, self.event_dict, self.feature_dict)
+					batch_file_idx, self.event_dict, self.feature_dict,
+					censoring_factor=self.censoring_factor)
 
 				lgnrm_nlogp_, lgnrm_nlogs_, _ = sess.run(
 					[self.lgnrm_nlogp, self.lgnrm_nlogs, self.train_op],
@@ -200,7 +210,8 @@ class SurvivalModel:
 			for val_batch_idx, batch_file_idx in enumerate(val_file_indices):
 
 				xb, cb, tb, sb = load_batch(batch_file_idx,
-					self.event_dict, self.feature_dict)
+					self.event_dict, self.feature_dict,
+					censoring_factor=self.censoring_factor)
 
 				current_val_stats.append(
 					self._get_train_stats(
@@ -327,7 +338,8 @@ class SurvivalModel:
 		for idx, batch_file_idx in enumerate(batch_indices):
 
 			xb, cb, tb, sb = load_batch(batch_file_idx,
-				self.event_dict, self.feature_dict)
+				self.event_dict, self.feature_dict,
+				censoring_factor=self.censoring_factor)
 
 			t_pred_ = sess.run(
 				self.t_pred,
@@ -351,10 +363,12 @@ class PosNegModel: ## amend this to use c vs s
 
 	def __init__(self, encoder_layer_sizes=(),
 		dropout_pct=0.,
+		censoring_factor=2.,
 		activation_fn=tf.nn.relu):
 
 		self.encoder_layer_sizes = encoder_layer_sizes
 		self.dropout_pct = dropout_pct
+		self.censoring_factor = censoring_factor
 		self.activation_fn = activation_fn
 
 
@@ -393,12 +407,14 @@ class PosNegModel: ## amend this to use c vs s
 				if train_type is 's_mlp':
 
 					xb, _, tb, sb = load_batch(
-						batch_file_idx, self.event_dict, self.feature_dict)
+						batch_file_idx, self.event_dict, self.feature_dict,
+						censoring_factor=self.censoring_factor)
 
 				elif train_type is 'c_mlp':
 
 					xb, sb, tb, _ = load_batch(
-						batch_file_idx, self.event_dict, self.feature_dict)
+						batch_file_idx, self.event_dict, self.feature_dict,
+						censoring_factor=self.censoring_factor)
 
 				sess.run(self.train_op, feed_dict={self.x: xb, self.s: sb, self.is_training: True})
 
@@ -415,12 +431,14 @@ class PosNegModel: ## amend this to use c vs s
 				if train_type is 's_mlp':
 
 					xb, _, tb, sb = load_batch(
-						batch_file_idx, self.event_dict, self.feature_dict)
+						batch_file_idx, self.event_dict, self.feature_dict,
+						censoring_factor=self.censoring_factor)
 
 				elif train_type is 'c_mlp':
 
 					xb, sb, tb, _ = load_batch(
-						batch_file_idx, self.event_dict, self.feature_dict)
+						batch_file_idx, self.event_dict, self.feature_dict,
+						censoring_factor=self.censoring_factor)
 
 				current_val_stats.append(self._get_train_stats(sess, xb, sb))
 
@@ -522,7 +540,8 @@ class PosNegModel: ## amend this to use c vs s
 		for idx, batch_file_idx in enumerate(batch_indices):
 
 			xb, cb, tb, sb = load_batch(batch_file_idx,
-				self.event_dict, self.feature_dict)
+				self.event_dict, self.feature_dict,
+				censoring_factor=self.censoring_factor)
 
 			s_probs_ = sess.run(
 				self.s_probs,
