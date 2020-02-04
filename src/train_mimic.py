@@ -15,13 +15,13 @@ def main():
 
 	batch_indices = list(range(143))
 
-	#train_indices = batch_indices[:86]
-	#val_indices = batch_indices[86:114]
-	#test_indices = batch_indices[114:]
+	train_indices = batch_indices[:86]
+	val_indices = batch_indices[86:114]
+	test_indices = batch_indices[114:]
 
-	train_indices = batch_indices[:2]
-	val_indices = batch_indices[2:4]
-	test_indices = batch_indices[4:6]
+	#train_indices = batch_indices[:2]
+	#val_indices = batch_indices[2:4]
+	#test_indices = batch_indices[4:6]
 
 	n_outputs = 10
 
@@ -118,7 +118,7 @@ def train_cft(model_params, censoring_factor, train_indices, val_indices, test_i
 			100, max_epochs_no_improve=3, learning_rate=3e-4,
 			verbose=False)
 		c_pred_cft, t_pred_cft, c_val, t_val, s_val = cft_mdl.predict_c_and_t(
-			sess, val_indices)
+			sess, test_indices)
 		
 	train_stats = list(zip(*train_stats))
 	val_stats = list(zip(*val_stats))
