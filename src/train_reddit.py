@@ -65,18 +65,18 @@ def main():
 
 		print('running with params:', params)
 
-		#try:
-		n_iter, final_train_nll, final_val_nll, aucs, raes_median, raes_all, cis = train_cft(
-			params, censoring_factor, train_fns, val_fns, test_fns)
-		status = 'complete'
+		try:
+			n_iter, final_train_nll, final_val_nll, aucs, raes_median, raes_all, cis = train_cft(
+				params, censoring_factor, train_fns, val_fns, test_fns)
+			status = 'complete'
 
-		# except:
-		# 	n_iter, final_train_nll, final_val_nll = [np.nan] * 3
-		# 	aucs = [np.nan] * n_outputs
-		# 	raes_median = [np.nan] * n_outputs
-		# 	raes_all = [np.nan] * n_outputs
-		# 	cis = [np.nan] * n_outputs
-		# 	status = 'failed'
+		except:
+			n_iter, final_train_nll, final_val_nll = [np.nan] * 3
+			aucs = [np.nan] * n_outputs
+			raes_median = [np.nan] * n_outputs
+			raes_all = [np.nan] * n_outputs
+			cis = [np.nan] * n_outputs
+			status = 'failed'
 
 		results = [status, params['fpr'], params['n_samples'],
 				   params['gs_temperature'],

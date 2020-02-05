@@ -1,5 +1,135 @@
 import numpy as np
 import tensorflow as tf
+import itertools
+import datetime
+import os
+
+from sklearn.metrics import roc_auc_score
+from train_mimic import rae_over_samples, rae, ci
+
+
+def main():
+
+	N = 40000
+
+	x_all, c_all, t_all, s_all = generate_dataset(N)
+
+	x_train, x_val, x_test = partition(x_all, [.6, .8])
+	c_train, c_val, c_test = partition(c_all, [.6, .8])
+	t_train, t_val, t_test = partition(t_all, [.6, .8])
+	s_train, s_val, s_test = partition(s_all, [.6, .8])
+
+	train_data = {'x': x_train, 'c': c_train, 't': t_train, 's': s_train}
+	val_data = {'x': x_val, 'c': c_val, 't': t_val, 's': s_val}
+	test_data = {'x': x_test, 'c': c_test, 't': t_test, 's': s_test}
+
+	utc = datetime.datetime.utcnow().strftime('%s')
+
+	n_outputs = 2
+
+	results_fn = os.path.join(
+		os.path.split(os.getcwd())[0],
+		'results',
+		'synthetic_' + utc + '.csv')
+
+	head = ['status', 'fpr', 'n_samples', 'gs_temperature',
+			'hidden_layer_size', 'estimator', 'n_iter',
+			'final_train_nll', 'final_val_nll']
+	head += ['mean_auc'] + [('auc%i' % i) for i in range (n_outputs)]
+	head += ['mean_raem'] + [('raem%i' % i) for i in range(n_outputs)]
+	head += ['mean_raea'] + [('raea%i' % i) for i in range(n_outputs)]
+	head += ['mean_ci'] + [('ci%i' % i) for i in range(n_outputs)]
+
+	with open(results_fn, 'w+') as results_file:
+		print(', '.join(head), file=results_file)
+
+	params = dict()
+
+	for i in range(10):
+
+		#params['fpr'] = np.random.rand() + 1e-3
+		params['fpr'] = .7
+		#params['n_samples'] = int(np.random.rand() * 100 + 20)
+		params['n_samples'] = 100
+		#params['gs_temperature'] = np.random.rand() + 1e-2
+		params['gs_temperature'] = .3
+		#hidden_layer_size = int(np.random.rand() * 1000 + 100)
+		hidden_layer_size = 100
+		params['encoder_layer_sizes'] = (hidden_layer_size, )
+		params['decoder_layer_sizes'] = (hidden_layer_size, )
+
+		params['estimator'] = 'gs'
+
+		print('running with params:', params)
+
+		try:
+			n_iter, final_train_nll, final_val_nll, aucs, raes_median, raes_all, cis = train_cft(
+				params, train_data, val_data, test_data)
+			status = 'complete'
+
+		except:
+			n_iter, final_train_nll, final_val_nll = [np.nan] * 3
+			aucs = [np.nan] * n_outputs
+			raes_median = [np.nan] * n_outputs
+			raes_all = [np.nan] * n_outputs
+			cis = [np.nan] * n_outputs
+			status = 'failed'
+
+		results = [status, params['fpr'], params['n_samples'],
+				   params['gs_temperature'],
+				   params['encoder_layer_sizes'][0],
+				   params['estimator'],
+				   n_iter, final_train_nll,
+				   final_val_nll]
+		results += [np.nanmean(aucs)] + aucs
+		results += [np.nanmean(raes_median)] + raes_median
+		results += [np.nanmean(raes_all)] + raes_all
+		results += [np.nanmean(cis)] + cis
+
+		results = [str(r) for r in results]
+
+		with open(results_fn, 'a') as results_file:
+			print(', '.join(results), file=results_file)
+
+		print('Run complete with status:', status)
+
+
+def train_cft(model_params, train_data, val_data, test_data):
+
+	tf.reset_default_graph()
+
+	cft_mdl = CFTModel(
+		fpr_likelihood=True,
+		prop_fpr=True,
+		dropout_pct=.5,
+		**model_params)
+
+	with tf.Session() as sess:
+		train_stats, val_stats = cft_mdl.train(
+			sess,
+			train_data['x'], train_data['t'], train_data['s'],
+			val_data['x'], val_data['t'], val_data['s'],
+			100, max_epochs_no_improve=3, learning_rate=3e-4,
+			verbose=False)
+		c_pred_cft, t_pred_cft = cft_mdl.predict_c_and_t(
+			sess, test_data['x'])
+
+	train_stats = list(zip(*train_stats))
+	val_stats = list(zip(*val_stats))
+
+	n_iter = train_stats[0][-1]
+	final_train_nll = train_stats[1][-1]
+	final_val_nll = val_stats[1][-1]
+
+	n_out = np.shape(test_data['c'])[1]
+
+	aucs = [roc_auc_score(test_data['c'][:, i], c_pred_cft[:, i]) for i in range(n_out)]
+	raes = [rae_over_samples(test_data['t'][:, i], test_data['s'][:, i], t_pred_cft[..., i]) for i in range(n_out)]
+	cis = [ci(test_data['t'][:, i], test_data['s'][:, i], t_pred_cft[..., i]) for i in range(n_out)]
+
+	raes_median, raes_all = list(zip(*raes))
+
+	return n_iter, final_train_nll, final_val_nll, aucs, list(raes_median), list(raes_all), cis
 
 
 class CFTModel:
@@ -30,7 +160,7 @@ class CFTModel:
 			  x_val, t_val, s_val,
 			  max_epochs, max_epochs_no_improve=0,
 			  learning_rate=1e-3,
-			  batch_size=300, batch_eval_freq=10,
+			  batch_size=400, batch_eval_freq=10,
 			  verbose=False):
 
 		self.n_features = np.shape(x_train)[1]
@@ -336,19 +466,11 @@ class CFTModel:
 		print('t_mu: %.2e' % val_stats[2], 't_logvar: %.2e\n' % val_stats[3])
 
 
-	def predict_c(self, sess, x_test):
+	def predict_c_and_t(self, sess, x_test):
 
-		return sess.run(self.c_probs, feed_dict={self.x: x_test, self.is_training: False})
-
-
-	def predict_t(self, sess, x_test):
-
-		return sess.run(self.t_pred, feed_dict={self.x: x_test, self.is_training: False})
-
-
-	def get_c_weights(self, sess):
-
-		return sess.run(self.c_logit_weights)
+		return sess.run(
+			[self.c_probs, self.t_pred],
+			feed_dict={self.x: x_test, self.is_training: False})
 
 
 def mlp(x, hidden_layer_sizes,
@@ -440,4 +562,38 @@ def flatten_samples(x, n_features):
 def unflatten_samples(x, n_samples, n_features):
 	return tf.reshape(x, (-1, n_samples, n_features))
 
+
+def generate_dataset(n_samples, noise=.5):
+
+	from sklearn.datasets import make_moons, make_circles
+
+	x0, c0 = make_moons(n_samples=n_samples, noise=noise, random_state=0)
+	x1, c1 = make_circles(n_samples=n_samples, noise=noise, factor=.5, random_state=0)
+	x2 = np.random.randn(n_samples, 1)
+	x = np.concatenate([x0, x1, x2], axis=1)
+	c = np.concatenate([c0[:, np.newaxis], c1[:, np.newaxis]], axis=1)
+	x = x - np.mean(x, axis=0)
+
+	max_time = 3
+
+	xmu_coeffs = np.array([[0., 0., 0., 0., 1.], [0., 0., 0., 0., -1.]]).T
+	mu_event = np.squeeze((x @ xmu_coeffs)) + .3
+	sig_event = .25 * np.random.randn(n_samples, 2)
+
+	event_times = np.exp(mu_event + sig_event * np.random.randn(n_samples, 2)) + max_time * (1 - c)
+	censoring_times = max_time * np.random.rand(n_samples, 2)
+
+	t = np.minimum(event_times, censoring_times)
+	s = (t == event_times).astype(int)
+
+	return x, c, t, s
+
+
+def partition(arr, cutpts):
+	cutpts = [0] + [int(pt * len(arr)) for pt in cutpts] + [len(arr)]
+	return (arr[p1:p2] for p1, p2 in zip(cutpts[:-1], cutpts[1:]))
+
+
+if __name__ == '__main__':
+	main()
 
