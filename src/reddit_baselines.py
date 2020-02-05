@@ -19,7 +19,7 @@ REDDIT_DIR = '/home/rapiduser/dictionary_collection_2'
 
 def main():
 
-	train_fns, val_fns, test_fns = get_files()
+	train_fns, val_fns, test_fns = get_files(REDDIT_DIR)
 
 	utc = datetime.datetime.utcnow().strftime('%s')
 

@@ -503,6 +503,7 @@ def load_batch(fn, censoring_factor=2.):
 		print('Warning: found nan t value')
 
 	t = (t + 60 * 60) / (60 * 60 * 24 * 30) # pad with 1 hour and convert to months
+	c = (events[:, :, 1] == 'event_time').astype('float')
 
 	median_event_times = np.array(
 		[np.nanmedian(t[:, i][c[:, i] == 1]) for i in range(np.shape(t)[1])])
@@ -513,7 +514,6 @@ def load_batch(fn, censoring_factor=2.):
 		median_event_times[np.isnan(median_event_times)] = np.nanmean(median_event_times)
 
 	#print('min t is %.2f and max t is %.2f' % (t.min(), t.max()))
-	c = (events[:, :, 1] == 'event_time').astype('float')
 
 	median_event_times = median_event_times[np.newaxis, :]
 	simulated_censoring_times = np.random.rand(

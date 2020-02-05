@@ -17,7 +17,7 @@ REDDIT_DIR = '/scratch/mme4/reddit'
 
 def main():
 
-	train_fns, val_fns, test_fns = get_files()
+	train_fns, val_fns, test_fns = get_files(REDDIT_DIR)
 
 	utc = datetime.datetime.utcnow().strftime('%s')
 
@@ -98,10 +98,10 @@ def main():
 		print('Run complete with status:', status)
 
 
-def get_files():
+def get_files(filedir):
 
 	import glob
-	filenames = glob.glob(REDDIT_DIR + '/*.pickle')
+	filenames = glob.glob(filedir + '/*.pickle')
 	filenames = np.random.RandomState(seed=0).permutation(filenames)
 
 	print('There are %i files (approx %i total users)' % (
