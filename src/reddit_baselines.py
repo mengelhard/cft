@@ -48,19 +48,19 @@ def main():
 
 		print('Running', model_type, 'with layers', hidden_layer_sizes)
 
-		try:
-			n_iter, final_train_nll, final_val_nll, aucs, raes_median, raes_all, cis = train_baseline(
-				model_type, censoring_factor, hidden_layer_sizes,
-				train_fns, val_fns, test_fns)
-			status = 'complete'
+		#try:
+		n_iter, final_train_nll, final_val_nll, aucs, raes_median, raes_all, cis = train_baseline(
+			model_type, censoring_factor, hidden_layer_sizes,
+			train_fns, val_fns, test_fns)
+		status = 'complete'
 
-		except:
-			n_iter, final_train_nll, final_val_nll = [np.nan] * 3
-			aucs = [np.nan] * n_outputs
-			raes_median = [np.nan] * n_outputs
-			raes_all = [np.nan] * n_outputs
-			cis = [np.nan] * n_outputs
-			status = 'failed'
+		# except:
+		# 	n_iter, final_train_nll, final_val_nll = [np.nan] * 3
+		# 	aucs = [np.nan] * n_outputs
+		# 	raes_median = [np.nan] * n_outputs
+		# 	raes_all = [np.nan] * n_outputs
+		# 	cis = [np.nan] * n_outputs
+		# 	status = 'failed'
 
 		results = [status, model_type, hidden_layer_sizes[0],
 				   censoring_factor, n_iter, final_train_nll,
@@ -211,6 +211,8 @@ class SurvivalModel:
 				current_val_stats.append(
 					self._get_train_stats(
 						sess, xvb, xfb, tb, sb))
+
+			print('current val stats are:', current_val_stats)
 
 			val_stats.append((idx, ) + tuple(np.mean(current_val_stats, axis=0)))
 
