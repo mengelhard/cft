@@ -11,9 +11,9 @@ from model import mlp, lognormal_nlogpdf, lognormal_nlogsurvival
 from model_mimic import load_batch, load_pickle
 from train_mimic import rae_over_samples, rae, ci
 
-MIMIC_DIR = '/Users/mme/projects/cft/data/mimic'
-MIMIC_DIR = '/home/rapiduser/mimic'
-#MIMIC_DIR = '/scratch/mme4/mimic_batches'
+#MIMIC_DIR = '/Users/mme/projects/cft/data/mimic'
+#MIMIC_DIR = '/home/rapiduser/mimic'
+MIMIC_DIR = '/scratch/mme4/mimic_batches'
 
 
 def main():
@@ -116,8 +116,10 @@ def train_baseline(
 	n_out = np.shape(c_val)[1]
 
 	if model_type is 'survival':
+		#print('t_pred is', predictions)
 		c_prob_pred = t_to_prob(predictions)
 		raes = [rae_over_samples(t_val[:, i], s_val[:, i], predictions[..., i]) for i in range(n_out)]
+		print('raes are', raes)
 		cis = [ci(t_val[:, i], s_val[:, i], predictions[..., i]) for i in range(n_out)]
 		raes_median, raes_all = list(zip(*raes))
 	else:

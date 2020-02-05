@@ -19,10 +19,6 @@ def main():
 	val_indices = batch_indices[86:114]
 	test_indices = batch_indices[114:]
 
-	#train_indices = batch_indices[:2]
-	#val_indices = batch_indices[2:4]
-	#test_indices = batch_indices[4:6]
-
 	n_outputs = 10
 
 	utc = datetime.datetime.utcnow().strftime('%s')

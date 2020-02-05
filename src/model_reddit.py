@@ -510,7 +510,7 @@ def load_batch(fn, censoring_factor=2.):
 
 	if np.any(np.isnan(median_event_times)):
 		n_nan = np.sum(np.isnan(median_event_times))
-		print('Warning: found %i nan median event times' % n_nan)
+		#print('Warning: found %i nan median event times' % n_nan)
 		median_event_times[np.isnan(median_event_times)] = np.nanmean(median_event_times)
 
 	#print('min t is %.2f and max t is %.2f' % (t.min(), t.max()))

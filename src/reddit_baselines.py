@@ -12,9 +12,9 @@ from model_reddit import load_batch
 from train_reddit import get_files
 from train_mimic import rae_over_samples, rae, ci
 
-#REDDIT_DIR = '/scratch/mme4/reddit'
+REDDIT_DIR = '/scratch/mme4/reddit'
 #REDDIT_DIR = '/Users/mme/projects/cft/data/reddit_subset'
-REDDIT_DIR = '/home/rapiduser/dictionary_collection_2'
+#REDDIT_DIR = '/home/rapiduser/dictionary_collection_2'
 
 
 def main():
