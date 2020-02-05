@@ -14,6 +14,7 @@ class CFTModelReddit:
 		fpr=5e-2,
 		fpr_likelihood=False,
 		prop_fpr=True,
+		censoring_factor=2.,
 		activation_fn=tf.nn.relu):
 
 		self.embedding_layer_sizes = embedding_layer_sizes
@@ -26,6 +27,7 @@ class CFTModelReddit:
 		self.nlog_fpr = -1 * np.log(fpr)
 		self.fpr_likelihood = fpr_likelihood
 		self.prop_fpr = prop_fpr
+		self.censoring_factor = censoring_factor
 		self.activation_fn = activation_fn
 
 
@@ -62,7 +64,7 @@ class CFTModelReddit:
 
 			for batch_idx, batch_file in enumerate(train_files):
 
-				xvb, xfb, cb, tb, sb = load_batch(batch_file)
+				xvb, xfb, cb, tb, sb = load_batch(batch_file, self.censoring_factor)
 
 				lgnrm_nlogp_, lgnrm_nlogs_, unif_nlogs_, _ = sess.run(
 					[self.lgnrm_nlogp, self.lgnrm_nlogs, self.unif_nlogs, self.train_op],
@@ -87,7 +89,7 @@ class CFTModelReddit:
 
 			for val_batch_idx, batch_file in enumerate(val_files):
 
-				xvb, xfb, cb, tb, sb = load_batch(batch_file)
+				xvb, xfb, cb, tb, sb = load_batch(batch_file, self.censoring_factor)
 
 				current_val_stats.append(
 					self._get_train_stats(
@@ -367,7 +369,7 @@ class CFTModelReddit:
 
 		for idx, batch_file in enumerate(filenames):
 
-			xvb, xfb, cb, tb, sb = load_batch(batch_file)
+			xvb, xfb, cb, tb, sb = load_batch(batch_file, self.censoring_factor)
 
 			c_probs_, t_pred_ = sess.run(
 				[self.c_probs, self.t_pred],
@@ -497,13 +499,23 @@ def load_batch(fn, censoring_factor=2.):
 	if t.min() < 0:
 		print('Warning: found t value less than zero')
 
+	if np.sum(np.isnan(t)) > 0:
+		print('Warning: found nan t value')
+
 	t = (t + 60 * 60) / (60 * 60 * 24 * 30) # pad with 1 hour and convert to months
+
+	median_event_times = np.array(
+		[np.nanmedian(t[:, i][c[:, i] == 1]) for i in range(np.shape(t)[1])])
+
+	if np.any(np.isnan(median_event_times)):
+		n_nan = np.sum(np.isnan(median_event_times))
+		print('Warning: found %i nan median event times' % n_nan)
+		median_event_times[np.isnan(median_event_times)] = np.nanmean(median_event_times)
 
 	#print('min t is %.2f and max t is %.2f' % (t.min(), t.max()))
 	c = (events[:, :, 1] == 'event_time').astype('float')
 
-	median_event_times = [np.median(t[:, i][c[:, i] == 1]) for i in range(np.shape(t)[1])]
-	median_event_times = np.array(median_event_times)[np.newaxis, :]
+	median_event_times = median_event_times[np.newaxis, :]
 	simulated_censoring_times = np.random.rand(
 		*np.shape(t)) * median_event_times * censoring_factor + 1e-2
 

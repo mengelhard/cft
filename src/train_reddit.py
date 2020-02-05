@@ -11,8 +11,8 @@ from model_reddit import CFTModelReddit
 from train_mimic import rae_over_samples, rae, ci
 
 
-#REDDIT_DIR = '/scratch/mme4/reddit'
-REDDIT_DIR = '/Users/mme/projects/cft/data/reddit_subset'
+REDDIT_DIR = '/scratch/mme4/reddit'
+#REDDIT_DIR = '/Users/mme/projects/cft/data/reddit_subset'
 
 
 def main():
@@ -29,7 +29,7 @@ def main():
 		'reddit_' + utc + '.csv')
 
 	head = ['status', 'fpr', 'n_samples', 'gs_temperature',
-			'hidden_layer_size', 'estimator', 'n_iter',
+			'hidden_layer_size', 'estimator', 'censoring_factor', 'n_iter',
 			'final_train_nll', 'final_val_nll']
 	head += ['mean_auc'] + [('auc%i' % i) for i in range (n_outputs)]
 	head += ['mean_raem'] + [('raem%i' % i) for i in range(n_outputs)]
@@ -41,27 +41,33 @@ def main():
 
 	params = dict()
 
-	for i in range(35):
+	for i in range(20):
 
-		params['fpr'] = np.random.rand() + 1e-3
-		params['n_samples'] = int(np.random.rand() * 100 + 20)
-		#params['n_samples'] = 5
-		params['gs_temperature'] = np.random.rand() + 1e-2
-		hidden_layer_size = int(np.random.rand() * 1000 + 100)
-		#hidden_layer_size = 10
+		censoring_factor = [2., 3.][i % 2]
+
+		#params['fpr'] = np.random.rand() + 1e-3
+		params['fpr'] = .7
+		#params['n_samples'] = int(np.random.rand() * 100 + 20)
+		params['n_samples'] = 100
+		#params['gs_temperature'] = np.random.rand() + 1e-2
+		params['gs_temperature'] = .3
+		#hidden_layer_size = int(np.random.rand() * 1000 + 100)
+		hidden_layer_size = 750
 		params['encoder_layer_sizes'] = (hidden_layer_size, )
 		params['decoder_layer_sizes'] = (hidden_layer_size, )
 
-		if i < 30:
-			params['estimator'] = 'gs'
-		else:
-			params['estimator'] = 'none'
+		params['estimator'] = 'gs'
+
+		# if i < 30:
+		# 	params['estimator'] = 'gs'
+		# else:
+		# 	params['estimator'] = 'none'
 
 		print('running with params:', params)
 
 		#try:
 		n_iter, final_train_nll, final_val_nll, aucs, raes_median, raes_all, cis = train_cft(
-			params, train_fns, val_fns, test_fns)
+			params, censoring_factor, train_fns, val_fns, test_fns)
 		status = 'complete'
 
 		# except:
@@ -76,6 +82,7 @@ def main():
 				   params['gs_temperature'],
 				   params['encoder_layer_sizes'][0],
 				   params['estimator'],
+				   censoring_factor,
 				   n_iter, final_train_nll,
 				   final_val_nll]
 		results += [np.nanmean(aucs)] + aucs
@@ -109,7 +116,7 @@ def get_files():
 	return train_filenames, val_filenames, test_filenames
 
 
-def train_cft(model_params, train_filenames, val_filenames, test_filenames):
+def train_cft(model_params, censoring_factor, train_filenames, val_filenames, test_filenames):
 
 	tf.reset_default_graph()
 
@@ -118,6 +125,7 @@ def train_cft(model_params, train_filenames, val_filenames, test_filenames):
 		fpr_likelihood=True,
 		prop_fpr=True,
 		dropout_pct=.5,
+		censoring_factor=censoring_factor,
 		**model_params)
 
 	with tf.Session() as sess:
@@ -126,7 +134,7 @@ def train_cft(model_params, train_filenames, val_filenames, test_filenames):
 			100, max_epochs_no_improve=3, learning_rate=3e-4,
 			verbose=False)
 		c_pred_cft, t_pred_cft, c_val, t_val, s_val = cft_mdl.predict_c_and_t(
-			sess, val_filenames)
+			sess, test_filenames)
 
 	train_stats = list(zip(*train_stats))
 	val_stats = list(zip(*val_stats))

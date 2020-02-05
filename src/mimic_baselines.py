@@ -12,6 +12,7 @@ from model_mimic import load_batch, load_pickle
 from train_mimic import rae_over_samples, rae, ci
 
 MIMIC_DIR = '/Users/mme/projects/cft/data/mimic'
+MIMIC_DIR = '/home/rapiduser/mimic'
 #MIMIC_DIR = '/scratch/mme4/mimic_batches'
 
 
