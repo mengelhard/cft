@@ -12,7 +12,7 @@ def main():
 
 	N = 40000
 
-	x_all, c_all, t_all, s_all = generate_dataset(N)
+	x_all, c_all, t_all, s_all = generate_dataset(N, noise=1.)
 
 	x_train, x_val, x_test = partition(x_all, [.6, .8])
 	c_train, c_val, c_test = partition(c_all, [.6, .8])
@@ -109,7 +109,7 @@ def train_cft(model_params, train_data, val_data, test_data):
 			sess,
 			train_data['x'], train_data['t'], train_data['s'],
 			val_data['x'], val_data['t'], val_data['s'],
-			100, max_epochs_no_improve=3, learning_rate=3e-4,
+			100, max_epochs_no_improve=10, learning_rate=3e-4,
 			verbose=False)
 		c_pred_cft, t_pred_cft = cft_mdl.predict_c_and_t(
 			sess, test_data['x'])

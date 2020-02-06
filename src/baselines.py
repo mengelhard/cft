@@ -15,7 +15,7 @@ def main():
 
 	N = 40000
 
-	x_all, c_all, t_all, s_all = generate_dataset(N)
+	x_all, c_all, t_all, s_all = generate_dataset(N, noise=1.)
 
 	assert not np.any(np.isnan(np.concatenate(
 		[x_all.flatten(), c_all.flatten(), t_all.flatten(), s_all.flatten()])))
@@ -114,7 +114,7 @@ def train_baseline(
 	with tf.Session() as sess:
 		train_stats, val_stats = mdl.train(
 			sess, train_data, val_data,
-			100, max_epochs_no_improve=3, learning_rate=3e-4,
+			100, max_epochs_no_improve=10, learning_rate=3e-4,
 			verbose=False)
 		predictions = mdl.predict(sess, test_data[0])
 		
